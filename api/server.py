@@ -235,7 +235,7 @@ async def lookup(string: str,
     if autocomplete:
         query = f"({string_lc_escaped}) OR ({string_lc_escaped}*)"
     else:
-        query = string_lc_escaped
+        query = f"({string_lc_escaped})"
 
     # Apply filters as needed.
     # Biolink type filter
