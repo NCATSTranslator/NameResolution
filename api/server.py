@@ -123,6 +123,9 @@ async def lookup_curies_get(
         string: Annotated[str, Query(
             description="The string to search for."
         )],
+        autocomplete: Annotated[bool, Query(
+            description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
+        )] = True,
         offset: Annotated[int, Query(
             description="The number of results to skip. Can be used to page through the results of a query.",
             # Offset should be greater than or equal to zero.
@@ -148,7 +151,7 @@ async def lookup_curies_get(
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, offset, limit, biolink_type, only_prefixes)
+    return await lookup(string, autocomplete, offset, limit, biolink_type, only_prefixes)
 
 
 @app.post("/lookup",
@@ -161,6 +164,9 @@ async def lookup_curies_post(
         string: Annotated[str, Query(
             description="The string to search for."
         )],
+        autocomplete: Annotated[bool, Query(
+            description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
+        )] = True,
         offset: Annotated[int, Query(
             description="The number of results to skip. Can be used to page through the results of a query.",
             # Offset should be greater than or equal to zero.
@@ -186,16 +192,22 @@ async def lookup_curies_post(
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, offset, limit, biolink_type, only_prefixes)
+    return await lookup(string, autocomplete, offset, limit, biolink_type, only_prefixes)
 
 
 async def lookup(string: str,
+           autocomplete: bool = False,
            offset: int = 0,
            limit: conint(le=1000) = 10,
            biolink_type: str = None,
            only_prefixes: str = ""
 ) -> List[LookupResult]:
-    """Returns cliques with a name or synonym that contains a specified string."""
+    """
+    Returns cliques with a name or synonym that contains a specified string.
+
+    :param autocomplete: Should we do the lookup in autocomplete mode (in which we expect the final word to be
+        incomplete) or not (in which the entire phrase is expected to be complete, i.e. as an entity linker)?
+    """
     #This original code tokenizes on spaces, and then removes all other punctuation.
     # so x-linked becomes xlinked and beta-secretasse becomes betasecretase.
     # This turns out to be rarely what is wanted, especially because the tokenizer
@@ -219,8 +231,11 @@ async def lookup(string: str,
     # We need to escape '&&' and '||' specially, since they are double-character sequences.
     string_lc_escaped = string_lc_escaped.replace('&&', '\\&\\&').replace('||', '\\|\\|')
 
-    # Then we combine it into a query that allows for incomplete words.
-    query = f"({string_lc_escaped}) OR ({string_lc_escaped}*)"
+    # If in autocomplete mode, we combine it into a query that allows for incomplete words.
+    if autocomplete:
+        query = f"({string_lc_escaped}) OR ({string_lc_escaped}*)"
+    else:
+        query = string_lc_escaped
 
     # Apply filters as needed.
     # Biolink type filter
