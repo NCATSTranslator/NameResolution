@@ -224,7 +224,7 @@ async def lookup_curies_get(
         )],
         autocomplete: Annotated[bool, Query(
             description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
-        )] = True,
+        )] = False,
         highlighting: Annotated[bool, Query(
             description="Return information on which labels and synonyms matched the search query?"
         )] = False,
@@ -283,7 +283,7 @@ async def lookup_curies_post(
         )],
         autocomplete: Annotated[bool, Query(
             description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
-        )] = True,
+        )] = False,
         highlighting: Annotated[bool, Query(
             description="Return information on which labels and synonyms matched the search query?"
         )] = False,
