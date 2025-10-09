@@ -448,7 +448,14 @@ async def lookup(string: str,
                 "boost": [
                     # The boost is multiplied with score -- calculating the log() reduces how quickly this increases
                     # the score for increasing clique identifier counts.
-                    "log(sum(clique_identifier_count, 1))"
+                    # "log(sum(clique_identifier_count, 1))"
+                    #
+                    # However, this approach causes very large clique_identifier_count entries (like diphenhydramine, cic=1332)
+                    # to be returned when we don't have an otherwise good match. So instead we make it stepwise:
+                    #   - If clique_identifier_count > 1, we boost by 2x
+                    "if(gt(clique_identifier_count,1),2,1)",
+                    #   - If clique_identifier_count > 5, we boost by a further 2x
+                    "if(gt(clique_identifier_count,5),2,1)",
                 ],
             },
         },
