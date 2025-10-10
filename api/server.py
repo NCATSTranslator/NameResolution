@@ -452,10 +452,12 @@ async def lookup(string: str,
                     #
                     # However, this approach causes very large clique_identifier_count entries (like diphenhydramine, cic=1332)
                     # to be returned when we don't have an otherwise good match. So instead we make it stepwise:
-                    #   - If clique_identifier_count > 1, we boost by 2x
-                    "if(gt(clique_identifier_count,1),2,1)",
-                    #   - If clique_identifier_count > 5, we boost by a further 2x
-                    "if(gt(clique_identifier_count,5),2,1)",
+                    #   - If clique_identifier_count == 1, we reduce the boost by 0.5x
+                    "if(eq(clique_identifier_count, 1), 1, 0.5)",
+                    #   - If clique_identifier_count > 10, we boost by a further 2x
+                    "if(gt(clique_identifier_count, 10), 2, 1)",
+                    #   - If clique_identifier_count > 20, we boost by a further 2x
+                    "if(gt(clique_identifier_count, 20), 2, 1)",
                 ],
             },
         },
