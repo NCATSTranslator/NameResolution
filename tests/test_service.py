@@ -238,7 +238,25 @@ def test_only_taxa_queries():
         'string': 'FTD',
         'only_taxa': 'NCBITaxon:9031',
     })
-    results_all_ftd = response.json()
-    assert len(results_all_ftd) == 2
-    assert results_all_ftd[0]['curie'] == 'NCBIGene:378899'
-    assert results_all_ftd[1]['curie'] == 'MONDO:0010857'
+    results_ftd_with_only_taxon = response.json()
+    assert len(results_ftd_with_only_taxon) == 2
+    assert results_ftd_with_only_taxon[0]['curie'] == 'NCBIGene:378899'
+    assert results_ftd_with_only_taxon[1]['curie'] == 'MONDO:0010857'
+
+    response = client.get("/lookup", params={
+        'string': 'FTD',
+        'only_taxa': 'NCBITaxon:9031',
+        'biolink_type': 'biolink:Gene'
+    })
+    results_ftd_gene_with_only_taxon = response.json()
+    assert len(results_ftd_gene_with_only_taxon) == 1
+    assert results_ftd_gene_with_only_taxon[0]['curie'] == 'NCBIGene:378899'
+
+    response = client.get("/lookup", params={
+        'string': 'FTD',
+        'only_taxa': 'NCBITaxon:9031',
+        'biolink_type': 'biolink:Disease'
+    })
+    results_ftd_disease_with_only_taxon = response.json()
+    assert len(results_ftd_disease_with_only_taxon) == 1
+    assert results_ftd_disease_with_only_taxon[0]['curie'] == 'MONDO:0010857'

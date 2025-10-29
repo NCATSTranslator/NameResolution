@@ -422,7 +422,7 @@ async def lookup(string: str,
                 taxa_filters.append(f'taxa:"{taxon}"')
 
             # We also need to include entries that don't have taxa specified.
-            taxa_filters.append('-taxa:[* TO *]')
+            taxa_filters.append('taxon_specific:false')
 
             # Combine all taxa filters.
             filters.append('(' + " OR ".join(taxa_filters) + ')')
@@ -467,7 +467,7 @@ async def lookup(string: str,
         "fields": "*, score",
         "params": inner_params,
     }
-    logging.debug(f"Query: {json.dumps(params, indent=2)}")
+    print(f"Query: {json.dumps(params, indent=2)}")
 
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     async with httpx.AsyncClient(timeout=None) as client:
