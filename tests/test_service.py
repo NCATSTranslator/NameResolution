@@ -223,3 +223,22 @@ def test_synonyms():
     mondo_0000828_results = results['MONDO:0000828']
     assert mondo_0000828_results['curie'] == 'MONDO:0000828'
     assert mondo_0000828_results['preferred_name'] == 'juvenile-onset Parkinson disease'
+
+def test_only_taxa_queries():
+    client = TestClient(app)
+    response = client.get("/lookup", params={
+        'string': 'FTD',
+    })
+    results_all_ftd = response.json()
+    assert len(results_all_ftd) == 2
+    assert results_all_ftd[0]['curie'] == 'NCBIGene:378899'
+    assert results_all_ftd[1]['curie'] == 'MONDO:0010857'
+
+    response = client.get("/lookup", params={
+        'string': 'FTD',
+        'only_taxa': 'NCBITaxon:9031',
+    })
+    results_all_ftd = response.json()
+    assert len(results_all_ftd) == 2
+    assert results_all_ftd[0]['curie'] == 'NCBIGene:378899'
+    assert results_all_ftd[1]['curie'] == 'MONDO:0010857'
