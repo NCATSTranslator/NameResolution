@@ -122,6 +122,7 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
             "name":"taxon_specific",
             "type":"boolean",
             "stored":true,
+            "multiValued":false,
             "sortMissingLast":true
         },
         {
