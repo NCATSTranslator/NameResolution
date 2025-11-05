@@ -273,7 +273,9 @@ async def lookup_curies_get(
 
 @app.post("/lookup",
     summary="Look up cliques for a fragment of a name or synonym.",
-    description="Returns cliques with a name or synonym that contains a specified string.",
+    description="Returns cliques with a name or synonym that contains a specified string. "
+                "You can find out more about this endpoint in the <a href="">NameRes documentation</a>."
+                "Note that the cliques we search through are conflated ",
     response_model=List[LookupResult],
     tags=["lookup"]
 )
