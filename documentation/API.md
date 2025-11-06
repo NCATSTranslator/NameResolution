@@ -19,7 +19,7 @@ for the protein they encode, and that no separate entry will be available for th
 
 ### Scoring
 
-Every `/lookup` or `/bulk-lookup` search result returns a search score. This score value is calculated by Apache Solr,
+Every `/lookup` or `/bulk-lookup` search result returns a search score. This score value is calculated by Apache Solr
 and does not have an upper range. This score begins with the [TF-IDF](https://en.wikipedia.org/wiki/Tf%E2%80%93idf)
 (term frequency-inverse document frequency) score, which is a measure of how relevant a term is to a document in a
 collection of documents. The score is then multiplied by the [BM25](https://en.wikipedia.org/wiki/Okapi_BM25) score,

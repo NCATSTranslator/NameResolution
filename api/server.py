@@ -11,6 +11,7 @@ import json
 import logging, warnings
 import os
 import re
+from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
 
 from fastapi import Body, FastAPI, Query
@@ -101,6 +102,14 @@ async def status() -> Dict:
 
 
 # ENDPOINT /reverse_lookup
+
+class DebugOptions(str, Enum):
+    # A list of possible Solr debug options from https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter
+    none = "none"
+    query = "query"
+    timing = "timing"
+    results = "results"
+    all = "all"
 
 class Request(BaseModel):
     """Reverse-lookup request body."""
@@ -210,6 +219,8 @@ class LookupResult(BaseModel):
     types: List[str]
     score: float
     clique_identifier_count: int
+    explain: Optional[str]    # Explanation for this specific result
+    debug: Optional[dict]     # The debug information for the entire query
 
 
 @app.get("/lookup",
@@ -263,12 +274,15 @@ async def lookup_curies_get(
                         "e.g. `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
             # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
-        )] = None
+        )] = None,
+        debug: Annotated[Union[DebugOptions, None], Query(
+            description="Provide debugging information on the Solr query at https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter"
+        )] = 'none'
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
 
 
 @app.post("/lookup",
@@ -324,12 +338,15 @@ async def lookup_curies_post(
                         "e.g. `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
             # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
-        )] = None
+        )] = None,
+        debug: Annotated[Union[DebugOptions, None], Query(
+            description="Provide debugging information on the Solr query at https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter"
+        )] = 'none'
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
 
 
 async def lookup(string: str,
@@ -340,7 +357,8 @@ async def lookup(string: str,
            biolink_types: List[str] = None,
            only_prefixes: str = "",
            exclude_prefixes: str = "",
-           only_taxa: str = ""
+           only_taxa: str = "",
+           debug: DebugOptions = 'none',
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
@@ -435,6 +453,9 @@ async def lookup(string: str,
             # "hl.highlightMultiTerm": "true",
         })
 
+    if debug and debug != 'none':
+        inner_params['debug'] = debug
+
     params = {
         "query": {
             "edismax": {
@@ -461,7 +482,8 @@ async def lookup(string: str,
         "fields": "*, score",
         "params": inner_params,
     }
-    logging.debug(f"Query: {json.dumps(params, indent=2)}")
+
+    print(f"Query: {json.dumps(params, indent=2)}")
 
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     async with httpx.AsyncClient(timeout=None) as client:
@@ -470,7 +492,12 @@ async def lookup(string: str,
         LOGGER.error("Solr REST error: %s", response.text)
         response.raise_for_status()
     response = response.json()
-    logging.debug(f"Solr response: {json.dumps(response, indent=2)}")
+    print(f"Solr response: {json.dumps(response, indent=2)}")
+
+    # Do we have any debug.explain information?
+    explain_info = {}
+    if 'debug' in response and 'explain' in response['debug']:
+        explain_info = response['debug']['explain']
 
     # Associate highlighting information with search results.
     highlighting_response = response.get("highlighting", {})
@@ -501,6 +528,17 @@ async def lookup(string: str,
             # Solr sometimes returns duplicates or a blank string here?
             synonym_matches = list(filter(lambda s: s, set(synonym_matches)))
 
+        # Prepare debugging and explain information for this request.
+        debug_for_this_request = response.get('debug', None)
+        explain_for_this_doc = None
+        if debug == 'explain' or debug == 'all':
+            if doc['id'] in explain_info:
+                explain_for_this_doc = explain_info[doc['id']]
+
+                # If we have explain information, we don't need to also include it in the debugging information.
+                debug_for_this_request['explain'] = {"_comment": "Removed to avoid data duplication"}
+
+
         outputs.append(LookupResult(curie=doc.get("curie", ""),
                            label=doc.get("preferred_name", ""),
                            highlighting={
@@ -511,7 +549,9 @@ async def lookup(string: str,
                            score=doc.get("score", ""),
                            taxa=doc.get("taxa", []),
                            clique_identifier_count=doc.get("clique_identifier_count", 0),
-                           types=[f"biolink:{d}" for d in doc.get("types", [])]))
+                           types=[f"biolink:{d}" for d in doc.get("types", [])],
+                           explain=explain_for_this_doc,
+                           debug=debug_for_this_request))
 
     return outputs
 
@@ -572,6 +612,10 @@ class NameResQuery(BaseModel):
         # We can't use `example` here because otherwise it gets filled in when filling this in.
         # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
     )
+    debug: Optional[DebugOptions] = Field(
+        'none',
+        description="Provide debugging information on the Solr query as per https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter"
+    )
 
 
 @app.post("/bulk-lookup",
@@ -592,7 +636,8 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             query.biolink_types,
             query.only_prefixes,
             query.exclude_prefixes,
-            query.only_taxa)
+            query.only_taxa,
+            query.debug)
     return result
 
 
