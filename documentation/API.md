@@ -11,13 +11,7 @@ all the [Babel conflations](https://github.com/NCATSTranslator/Babel/blob/master
 when Solr database is built. This means that -- for example -- protein-encoding genes will include the synonyms found
 for the protein they encode, and that no separate entry will be available for those proteins.
 
-## Search endpoints
-
-### `/lookup`
-
-### `/bulk-lookup`
-
-### Scoring
+## Scoring
 
 Every `/lookup` or `/bulk-lookup` search result returns a search score. This score value is calculated by Apache Solr
 and does not have an upper range. For every term in the query and every document in the result, Solr will calculate a
@@ -32,7 +26,7 @@ and does not have an upper range. For every term in the query and every document
 If multiple terms are matched in the same document, the sum of the score for each term will be used.
 
 The TF*IDF score will be multiplied by [several boosts](https://github.com/NCATSTranslator/NameResolution/blob/56e2151bb9e6fd120644cebdf4ff45b3bc47da05/api/server.py#L436-L461)
-that depend on four factors: 
+that depend on four factors:
 * We index two fields: the "preferred name" of every clique and the "synonyms" of every clique. The [preferred name
   is chosen by Babel](https://github.com/NCATSTranslator/Babel?tab=readme-ov-file#how-does-babel-choose-a-preferred-label-for-a-clique),
   while the synonyms are collected from all the different Babel sources.
@@ -63,6 +57,13 @@ And provide additional boosts for phrase matches, boosting synonym matches more 
 
 Finally, we multiply the total score by the (base 10) logarithm by the number of identifiers in the clique plus one.
 This boost ranges from log(2) = 0.3 for a clique that only has a single identifier to over log(1000) = 3.
+
+
+## Search endpoints
+
+### `/lookup`
+
+### `/bulk-lookup`
 
 ## Lookup endpoints
 
