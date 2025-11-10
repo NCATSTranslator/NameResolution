@@ -16,7 +16,7 @@ FROM ghcr.io/translatorsri/renci-python-image:3.11.5
 # - ${ROOT} is where the source code will be copied.
 ARG ROOT=/code/nameres-data-loading
 # - ${SOLR_VERSION} is the SOLR version to install.
-ARG SOLR_VERSION=9.1.0
+ARG SOLR_VERSION=9.10.0
 # - ${SOLR_DIR} is the SOLR directory to use.
 ARG SOLR_DIR=/var/solr
 
