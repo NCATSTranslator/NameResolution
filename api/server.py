@@ -443,10 +443,18 @@ async def lookup(string: str,
                 # pf = phrase fields, i.e. how should we boost these fields if they contain the entire search phrase.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
                 "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^30 names^20",
-                # Boosts
-                "bq": [],
+                "bq": [
+                    # Boost queries are run on the matching documents, and provide an ADDITIVE score to matching documents.
+                    # We'll use this to slightly boost model organisms. This shouldn't change their relative order except
+                    # against each other.
+                    "taxa:'NCBITaxon:9606'^5",      # Humans (Homo sapiens): this will +10 to any document that relates to humans.
+                    "taxa:'NCBITaxon:10090'^4",     # Mouse (Mus musculus)
+                    "taxa:'NCBITaxon:10116'^3",     # Rat (Rattus norvegicus)
+                    "taxa:'NCBITaxon:7955'^2",      # Zebrafish (Danio rerio)
+                    "taxa:'NCBITaxon:6239'^1",      # C. elegans
+                ],
                 "boost": [
-                    # The boost is multiplied with score -- calculating the log() reduces how quickly this increases
+                    # Boosts are MULTIPLIED with score -- calculating the log() reduces how quickly this increases
                     # the score for increasing clique identifier counts.
                     # "log(sum(clique_identifier_count, 1))"
                     #
