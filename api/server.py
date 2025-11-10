@@ -443,15 +443,7 @@ async def lookup(string: str,
                 # pf = phrase fields, i.e. how should we boost these fields if they contain the entire search phrase.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
                 "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^30 names^20",
-                "bq": [
-                    # Boost queries are run on the matching documents, and provide an ADDITIVE score to matching documents.
-                    # We'll use this to slightly boost model organisms.
-                    'taxa:"NCBITaxon:9606"^200',      # Humans (Homo sapiens): this will +10 to any document that relates to humans.
-                    'taxa:"NCBITaxon:10090"^100',     # Mouse (Mus musculus)
-                    'taxa:"NCBITaxon:10116"^80',      # Rat (Rattus norvegicus)
-                    'taxa:"NCBITaxon:7955"^60',       # Zebrafish (Danio rerio)
-                    'taxa:"NCBITaxon:6239"^40',       # C. elegans
-                ],
+                "bq": [],
                 "boost": [
                     # Boosts are MULTIPLIED with score -- calculating the log() reduces how quickly this increases
                     # the score for increasing clique identifier counts.
@@ -459,12 +451,20 @@ async def lookup(string: str,
                     #
                     # However, this approach causes very large clique_identifier_count entries (like diphenhydramine, cic=1332)
                     # to be returned when we don't have an otherwise good match. So instead we make it stepwise:
-                    #   - If clique_identifier_count == 1, we reduce the boost by 0.5x
-                    "if(eq(clique_identifier_count, 1), 1, 0.5)",
+                    #   - If clique_identifier_count == 1, we reduce the boost by 0.7x
+                    "if(eq(clique_identifier_count, 1), 1, 0.7)",
                     #   - If clique_identifier_count > 10, we boost by a further 2x
                     "if(gt(clique_identifier_count, 10), 2, 1)",
                     #   - If clique_identifier_count > 20, we boost by a further 2x
                     "if(gt(clique_identifier_count, 20), 2, 1)",
+                    # Slightly boost model organisms: humans, mice, rats, zebrafish and C. elegans
+                    '''sum(1,
+                        product(termfreq(taxa,"NCBITaxon:9606"),2),
+                        product(termfreq(taxa,"NCBITaxon:10090"),1.5),
+                        product(termfreq(taxa,"NCBITaxon:10116"),1.4),
+                        product(termfreq(taxa,"NCBITaxon:7955"),1.3),
+                        product(termfreq(taxa,"NCBITaxon:6239"),1.2)
+                    )'''
                 ],
             },
         },
