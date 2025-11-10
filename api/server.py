@@ -437,12 +437,12 @@ async def lookup(string: str,
         "query": {
             "edismax": {
                 "query": query,
-                # qf = query fields, i.e. how should we boost these fields if they contain the same fields as the input.
+                # qf = query fields, i.e. how should we boost these fields if they contain the query terms.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#qf-query-fields-parameter
                 "qf": "preferred_name_exactish^250 names_exactish^100 preferred_name^25 names^10",
-                # pf = phrase fields, i.e. how should we boost these fields if they contain the entire search phrase.
+                # pf = phrase fields, i.e. how should we boost these fields if they contain query terms close together.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
-                "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^30 names^20",
+                "pf": "preferred_name_exactish names_exactish preferred_name names",
                 "bq": [],
                 "boost": [
                     # Boosts are MULTIPLIED with score -- calculating the log() reduces how quickly this increases
@@ -452,7 +452,7 @@ async def lookup(string: str,
                     # However, this approach causes very large clique_identifier_count entries (like diphenhydramine, cic=1332)
                     # to be returned when we don't have an otherwise good match. So instead we make it stepwise:
                     #   - If clique_identifier_count == 1, we reduce the boost by 0.7x
-                    "if(eq(clique_identifier_count, 1), 1, 0.7)",
+                    "if(eq(clique_identifier_count, 1), 0.7, 1)",
                     #   - If clique_identifier_count > 10, we boost by a further 2x
                     "if(gt(clique_identifier_count, 10), 2, 1)",
                     #   - If clique_identifier_count > 20, we boost by a further 2x
