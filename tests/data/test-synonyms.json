@@ -9,7 +9,8 @@
             "NamedThing"
         ],
         "shortest_name_length": 19,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "CHEBI:74925",
@@ -43,7 +44,8 @@
             "NamedThing"
         ],
         "shortest_name_length": 15,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "HP:0001300",
@@ -60,7 +62,8 @@
             "Entity"
         ],
         "shortest_name_length": 20,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "HP:0002322",
@@ -80,7 +83,8 @@
             "Entity"
         ],
         "shortest_name_length": 11,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "HP:0002511",
@@ -98,7 +102,8 @@
             "Entity"
         ],
         "shortest_name_length": 17,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "HP:0002548",
@@ -116,7 +121,8 @@
             "Entity"
         ],
         "shortest_name_length": 30,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0000828",
@@ -133,7 +139,8 @@
             "Entity"
         ],
         "shortest_name_length": 34,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0001945",
@@ -151,7 +158,8 @@
             "Entity"
         ],
         "shortest_name_length": 29,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0004975",
@@ -175,7 +183,8 @@
             "Entity"
         ],
         "shortest_name_length": 2,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0005180",
@@ -193,7 +202,8 @@
             "Entity"
         ],
         "shortest_name_length": 17,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0006966",
@@ -214,7 +224,8 @@
             "Entity"
         ],
         "shortest_name_length": 22,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0007088",
@@ -238,7 +249,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0007089",
@@ -269,7 +281,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0007104",
@@ -296,7 +309,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0007312",
@@ -313,7 +327,8 @@
             "Entity"
         ],
         "shortest_name_length": 56,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0007433",
@@ -330,7 +345,8 @@
             "Entity"
         ],
         "shortest_name_length": 56,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0007488",
@@ -356,7 +372,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0007495",
@@ -392,7 +409,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0007496",
@@ -418,7 +436,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0008193",
@@ -436,7 +455,8 @@
             "Entity"
         ],
         "shortest_name_length": 36,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0008199",
@@ -456,7 +476,8 @@
             "Entity"
         ],
         "shortest_name_length": 2,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0008200",
@@ -479,7 +500,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0008201",
@@ -498,7 +520,8 @@
             "Entity"
         ],
         "shortest_name_length": 14,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0008685",
@@ -524,7 +547,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0009497",
@@ -544,7 +568,8 @@
             "Entity"
         ],
         "shortest_name_length": 7,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0009830",
@@ -571,7 +596,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0009839",
@@ -594,7 +620,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010360",
@@ -614,7 +641,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010422",
@@ -635,7 +663,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010482",
@@ -654,7 +683,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010709",
@@ -683,7 +713,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010747",
@@ -712,7 +743,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010783",
@@ -724,7 +756,8 @@
             "NamedThing"
         ],
         "shortest_name_length": 51,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010796",
@@ -741,7 +774,8 @@
             "Entity"
         ],
         "shortest_name_length": 32,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010820",
@@ -773,7 +807,8 @@
             "Entity"
         ],
         "shortest_name_length": 2,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0010857",
@@ -805,7 +840,44 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
+    },
+    {
+      "curie": "NCBIGene:378899",
+      "preferred_name": "FTL",
+      "names": [
+        "FTL",
+        "FTD",
+        "ferritoid",
+        "ferritin light chain",
+        "ferritin, light polypeptide",
+        "Q8AYG9_CHICK Ferritin (trembl)"
+      ],
+      "taxa": [
+        "NCBITaxon:9031"
+      ],
+      "taxon_specific": true,
+      "types": [
+        "Gene",
+        "GeneOrGeneProduct",
+        "GenomicEntity",
+        "ChemicalEntityOrGeneOrGeneProduct",
+        "PhysicalEssence",
+        "OntologyClass",
+        "BiologicalEntity",
+        "ThingWithTaxon",
+        "NamedThing",
+        "Entity",
+        "PhysicalEssenceOrOccurrent",
+        "MacromolecularMachineMixin",
+        "Protein",
+        "GeneProductMixin",
+        "Polypeptide",
+        "ChemicalEntityOrProteinOrPolypeptide"
+      ],
+      "shortest_name_length": 3,
+      "clique_identifier_count": 3
     },
     {
         "curie": "MONDO:0011194",
@@ -829,7 +901,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011220",
@@ -851,7 +924,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011401",
@@ -869,7 +943,8 @@
             "Entity"
         ],
         "shortest_name_length": 49,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011513",
@@ -886,7 +961,8 @@
             "Entity"
         ],
         "shortest_name_length": 84,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011551",
@@ -914,7 +990,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011561",
@@ -939,7 +1016,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011562",
@@ -962,7 +1040,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011613",
@@ -989,7 +1068,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011647",
@@ -1013,7 +1093,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011658",
@@ -1036,7 +1117,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011706",
@@ -1066,7 +1148,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011737",
@@ -1086,7 +1169,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011743",
@@ -1113,7 +1197,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011764",
@@ -1136,7 +1221,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011777",
@@ -1160,7 +1246,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011896",
@@ -1182,7 +1269,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0011913",
@@ -1215,7 +1303,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012153",
@@ -1237,7 +1326,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012321",
@@ -1261,7 +1351,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012344",
@@ -1284,7 +1375,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012466",
@@ -1306,7 +1398,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012609",
@@ -1330,7 +1423,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012630",
@@ -1351,7 +1445,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012631",
@@ -1372,7 +1467,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012632",
@@ -1388,7 +1484,8 @@
             "NamedThing"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0012789",
@@ -1413,7 +1510,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0013060",
@@ -1441,7 +1539,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0013150",
@@ -1464,7 +1563,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0013167",
@@ -1483,7 +1583,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0013340",
@@ -1505,7 +1606,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0013625",
@@ -1529,7 +1631,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0013653",
@@ -1551,7 +1654,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0014036",
@@ -1574,7 +1678,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0014231",
@@ -1602,7 +1707,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0014233",
@@ -1625,7 +1731,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0014265",
@@ -1650,7 +1757,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0014316",
@@ -1676,7 +1784,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0014604",
@@ -1698,7 +1807,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0014742",
@@ -1719,7 +1829,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0014796",
@@ -1743,7 +1854,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0015140",
@@ -1762,7 +1874,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0017279",
@@ -1781,7 +1894,8 @@
             "Entity"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0017639",
@@ -1798,7 +1912,8 @@
             "Entity"
         ],
         "shortest_name_length": 23,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0018466",
@@ -1815,7 +1930,8 @@
             "NamedThing"
         ],
         "shortest_name_length": 4,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0018899",
@@ -1834,7 +1950,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0020352",
@@ -1852,7 +1969,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0054835",
@@ -1872,7 +1990,8 @@
             "Entity"
         ],
         "shortest_name_length": 5,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0054836",
@@ -1890,7 +2009,8 @@
             "Entity"
         ],
         "shortest_name_length": 6,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0100065",
@@ -1907,7 +2027,8 @@
             "Entity"
         ],
         "shortest_name_length": 59,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0100087",
@@ -1926,7 +2047,8 @@
             "Entity"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "MONDO:0100088",
@@ -1938,7 +2060,8 @@
             "NamedThing"
         ],
         "shortest_name_length": 24,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     },
     {
         "curie": "www:bget?hsa:11315",
@@ -1954,6 +2077,7 @@
             "NamedThing"
         ],
         "shortest_name_length": 3,
-        "clique_identifier_count": 1
+        "clique_identifier_count": 1,
+        "taxa": [], "taxon_specific": false
     }
 ]

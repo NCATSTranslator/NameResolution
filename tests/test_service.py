@@ -32,8 +32,7 @@ def test_limit():
     params2 = {'string': 'alzheimer', 'limit': 100}
     response = client.post("/lookup", params=params2)
     syns = response.json()
-    #There are actually 31 in the test file
-    assert len(syns) == 31
+    assert len(syns) == 30
 
 
 def test_type_subsetting():
@@ -42,17 +41,17 @@ def test_type_subsetting():
     params = {'string': 'Parkinson', "limit": 100}
     response = client.post("/lookup", params=params)
     syns = response.json()
-    assert len(syns) == 57
+    assert len(syns) == 34
     #Now limit to Disease (just 53)
     params = {'string': 'Parkinson', "limit": 100, "biolink_type": "biolink:Disease"}
     response = client.post("/lookup", params=params)
     syns = response.json()
-    assert len(syns) == 53
+    assert len(syns) == 33
     #Now verify that NamedThing is everything
     params = {'string': 'Parkinson', "limit": 100, "biolink_type": "biolink:NamedThing"}
     response = client.post("/lookup", params=params)
     syns = response.json()
-    assert len(syns) == 57
+    assert len(syns) == 34
 
 def test_offset():
     client = TestClient(app)
@@ -60,7 +59,7 @@ def test_offset():
     params = {'string': 'alzheimer', 'limit': 100, 'offset': 20}
     response = client.post("/lookup", params=params)
     syns = response.json()
-    assert len(syns) == 11
+    assert len(syns) == 10
 
 def test_hyphens():
     """The test data contains CHEBI:74925 with name 'beta-secretase inhibitor.
@@ -71,8 +70,9 @@ def test_hyphens():
     response = client.post("/lookup", params=params)
     syns = response.json()
 
-    assert len(syns) == 1
+    assert len(syns) == 2
     assert syns[0]["curie"] == 'CHEBI:74925'
+    assert syns[1]["curie"] == 'MONDO:0011561'
 
     #no hyphen
     params = {'string': 'beta secretase'}
@@ -223,3 +223,40 @@ def test_synonyms():
     mondo_0000828_results = results['MONDO:0000828']
     assert mondo_0000828_results['curie'] == 'MONDO:0000828'
     assert mondo_0000828_results['preferred_name'] == 'juvenile-onset Parkinson disease'
+
+def test_only_taxa_queries():
+    client = TestClient(app)
+    response = client.get("/lookup", params={
+        'string': 'FTD',
+    })
+    results_all_ftd = response.json()
+    assert len(results_all_ftd) == 2
+    assert results_all_ftd[0]['curie'] == 'NCBIGene:378899'
+    assert results_all_ftd[1]['curie'] == 'MONDO:0010857'
+
+    response = client.get("/lookup", params={
+        'string': 'FTD',
+        'only_taxa': 'NCBITaxon:9031',
+    })
+    results_ftd_with_only_taxon = response.json()
+    assert len(results_ftd_with_only_taxon) == 2
+    assert results_ftd_with_only_taxon[0]['curie'] == 'NCBIGene:378899'
+    assert results_ftd_with_only_taxon[1]['curie'] == 'MONDO:0010857'
+
+    response = client.get("/lookup", params={
+        'string': 'FTD',
+        'only_taxa': 'NCBITaxon:9031',
+        'biolink_type': 'biolink:Gene'
+    })
+    results_ftd_gene_with_only_taxon = response.json()
+    assert len(results_ftd_gene_with_only_taxon) == 1
+    assert results_ftd_gene_with_only_taxon[0]['curie'] == 'NCBIGene:378899'
+
+    response = client.get("/lookup", params={
+        'string': 'FTD',
+        'only_taxa': 'NCBITaxon:9031',
+        'biolink_type': 'biolink:Disease'
+    })
+    results_ftd_disease_with_only_taxon = response.json()
+    assert len(results_ftd_disease_with_only_taxon) == 1
+    assert results_ftd_disease_with_only_taxon[0]['curie'] == 'MONDO:0010857'
