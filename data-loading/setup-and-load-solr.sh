@@ -119,6 +119,13 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
             "multiValued":true
         },
         {
+            "name":"taxon_specific",
+            "type":"boolean",
+            "stored":true,
+            "multiValued":false,
+            "sortMissingLast":true
+        },
+        {
             "name":"clique_identifier_count",
             "type":"pint",
             "stored":true

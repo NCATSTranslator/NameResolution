@@ -414,10 +414,18 @@ async def lookup(string: str,
     # Taxa filter.
     # only_taxa is like: 'NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955'
     if only_taxa:
-        taxa_filters = []
-        for taxon in re.split('\\s*\\|\\s*', only_taxa):
-            taxa_filters.append(f'taxa:"{taxon}"')
-        filters.append(" OR ".join(taxa_filters))
+        taxon_ids = re.split('\\s*\\|\\s*', only_taxa)
+        if taxon_ids:
+            taxa_filters = []
+
+            for taxon in taxon_ids:
+                taxa_filters.append(f'taxa:"{taxon}"')
+
+            # We also need to include entries that don't have taxa specified.
+            taxa_filters.append('taxon_specific:false')
+
+            # Combine all taxa filters.
+            filters.append('(' + " OR ".join(taxa_filters) + ')')
 
     # Turn on highlighting if requested.
     inner_params = {}
