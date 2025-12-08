@@ -450,7 +450,7 @@ async def lookup(string: str,
                 "qf": "preferred_name_exactish^250 names_exactish^100 preferred_name^25 names^10",
                 # pf = phrase fields, i.e. how should we boost these fields if they contain query terms close together.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
-                "pf": "preferred_name_exactish names_exactish preferred_name names",
+                # "pf": "preferred_name_exactish names_exactish preferred_name names",
                 "bq": [],
                 "boost": [
                     # Boosts are MULTIPLIED with score -- calculating the log() reduces how quickly this increases
@@ -463,8 +463,8 @@ async def lookup(string: str,
                     "if(eq(clique_identifier_count, 1), 0.7, 1)",
                     #   - If clique_identifier_count > 10, we boost by a further 2x
                     "if(gt(clique_identifier_count, 10), 2, 1)",
-                    #   - If clique_identifier_count > 20, we boost by a further 2x
-                    "if(gt(clique_identifier_count, 20), 2, 1)",
+                    #   - If clique_identifier_count > 20, we boost by a further 3x
+                    "if(gt(clique_identifier_count, 20), 3, 1)",
                     # Slightly boost model organisms: humans, mice, rats, zebrafish and C. elegans
                     '''sum(1,
                         product(termfreq(taxa,"NCBITaxon:9606"),2),
