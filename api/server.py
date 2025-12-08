@@ -447,15 +447,15 @@ async def lookup(string: str,
                 "query": query,
                 # qf = query fields, i.e. how should we boost these fields if they contain the query terms.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#qf-query-fields-parameter
-                "qf": "preferred_name_exactish^250 names_exactish^100 preferred_name^25 names^10",
+                "qf": "preferred_name_exactish^300 names_exactish^200 preferred_name^10 names^5",
                 # pf = phrase fields, i.e. how should we boost these fields if they contain query terms close together.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
-                # "pf": "preferred_name_exactish names_exactish preferred_name names",
+                "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^10 names^5",
                 "bq": [],
                 "boost": [
                     # Boosts are MULTIPLIED with score -- calculating the log() reduces how quickly this increases
                     # the score for increasing clique identifier counts.
-                    # "log(sum(clique_identifier_count, 1))"
+                    # "max(log(sum(clique_identifier_count, 1)), 4)",
                     #
                     # However, this approach causes very large clique_identifier_count entries (like diphenhydramine, cic=1332)
                     # to be returned when we don't have an otherwise good match. So instead we make it stepwise:
