@@ -450,7 +450,7 @@ async def lookup(string: str,
                 "qf": "preferred_name_exactish^300 names_exactish^200 preferred_name^10 names^5",
                 # pf = phrase fields, i.e. how should we boost these fields if they contain query terms close together.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
-                "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^10 names^5",
+                "pf": "preferred_name_exactish^30 names_exactish^20 preferred_name^10 names^5",
                 "bq": [],
                 "boost": [
                     # Boosts are MULTIPLIED with score -- calculating the log() reduces how quickly this increases
