@@ -65,6 +65,14 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
         {
             "name":"names",
             "type":"LowerTextField",
+            "indexed":true,
+            "stored":true,
+            "multiValued":true
+        },
+        {
+            "name":"names_exactish",
+            "type":"exactish",
+            "indexed":true,
             "stored":true,
             "multiValued":true
         },
@@ -111,11 +119,26 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
             "multiValued":true
         },
         {
+            "name":"taxon_specific",
+            "type":"boolean",
+            "stored":true,
+            "multiValued":false,
+            "sortMissingLast":true
+        },
+        {
             "name":"clique_identifier_count",
             "type":"pint",
             "stored":true
         }
     ] }' 'http://localhost:8983/solr/name_lookup/schema'
+
+# Add a copy field to copy names into names_exactish.
+curl -X POST -H 'Content-type:application/json' --data-binary '{
+    "add-copy-field": {
+      "source": "names",
+      "dest": "names_exactish"
+    }
+}' 'http://localhost:8983/solr/name_lookup/schema'
 
 # Add a copy field to copy preferred_name into preferred_name_exactish.
 curl -X POST -H 'Content-type:application/json' --data-binary '{
@@ -128,7 +151,9 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
 # add data
 for f in $1; do
 	echo "Loading $f..."
-	curl -X POST -H 'Content-Type: application/json' -d @$f \
+	# curl -d @$f needs to load the entire file into memory before uploading it, whereas
+	# curl -X POST -T $f will stream it. See https://github.com/TranslatorSRI/NameResolution/issues/194
+	curl -H 'Content-Type: application/json' -X POST -T $f \
 	    'http://localhost:8983/solr/name_lookup/update/json/docs?processor=uuid&uuid.fieldName=id&commit=true'
 	sleep 30
 done

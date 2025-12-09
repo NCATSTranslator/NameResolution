@@ -2,7 +2,7 @@
 - Babel: [2024mar24](https://stars.renci.org/var/babel_outputs/2024mar24/) (Babel Translator May 2024 Release)
 - NameRes: [v1.3.12](https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.12)
 
-Next release: _None as yet_
+Next release: [Translator "Fugu" July 2024](TranslatorFuguJuly2024.md)
 
 ## New features
 * Solr database now has two additional fields for each clique:

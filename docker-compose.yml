@@ -1,20 +1,35 @@
-version: '3'
 services:
   solr:
     container_name: name_solr
-    image: solr
+    image: solr:9.1
     environment:
-      SOLR_JAVA_MEM: '-Xms2g -Xmx2g'
+      # Change this setting to control how much memory you would like your Solr setup to have.
+      # Note that your Docker will need to be configured to allow this amount of memory.
+      SOLR_JAVA_MEM: '-Xms25G -Xmx25G'
     ports:
       - '8983:8983'
     command: ['-DzkRun']
- 
-  name_lookup:
-    container_name: name_lookup
-    image: name_lookup
-    build:
-      context: .
+
+    # Solr needs to store its data somewhere. It defaults to `./data`, but you can reconfigure this to any
+    # directory you want.
+    volumes:
+      - type: bind
+        source: ./data/solr
+        target: /var/solr/data
+
+  nameres:
+    container_name: nameres
     environment:
       - SOLR_HOST=name_solr
+      - BABEL_VERSION=          # e.g. 2025mar31
+      - BABEL_VERSION_URL=      # The URL of the Babel version URL
+      - LOCATION_VALUE=RENCI
+      - MATURITY_VALUE=development
     ports:
       - '2433:2433'
+
+    # This will use the latest version of NameRes -- if you'd prefer to build an image using the Dockerfile
+    # in the current directory, remove the `:latest` tag and uncomment the `build:` section that follows it.
+    image: ghcr.io/translatorsri/nameresolution:latest
+    # build:
+    #  context: .

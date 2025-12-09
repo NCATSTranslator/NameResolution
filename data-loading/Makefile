@@ -5,7 +5,7 @@
 #
 
 # Configuration
-SYNONYMS_URL=https://stars.renci.org/var/babel_outputs/2024mar24/synonyms/
+SYNONYMS_URL=https://stars.renci.org/var/babel_outputs/2025sep1/synonyms/
 
 # How much memory should Solr use.
 SOLR_MEM=220G
@@ -35,11 +35,10 @@ data/synonyms/done:
 	wget -c -r -l1 -nd -P data/synonyms ${SYNONYMS_URL}
 	gunzip data/synonyms/*.txt.gz
 	echo Downloaded synonyms from ${SYNONYMS_URL}
-	split -d -l 10000000 data/synonyms/Protein.txt data/synonyms/Protein.txt. && rm data/synonyms/Protein.txt
 	# split -d -l 10000000 data/synonyms/SmallMolecule.txt data/synonyms/SmallMolecule.txt. && rm data/synonyms/SmallMolecule.txt
 	split -d -l 10000000 data/synonyms/DrugChemicalConflated.txt data/synonyms/DrugChemicalConflated.txt. && rm data/synonyms/DrugChemicalConflated.txt
-	split -d -l 10000000 data/synonyms/Gene.txt data/synonyms/Gene.txt. && rm data/synonyms/Gene.txt
-	echo Split Protein.txt, DrugChemicalConflated.txt and Gene.txt, and deleted the original files.
+	split -d -l 10000000 data/synonyms/GeneProteinConflated.txt data/synonyms/GeneProteinConflated.txt. && rm data/synonyms/GeneProteinConflated.txt
+	echo Split DrugChemicalConflated.txt and GeneProteinConflated.txt, and deleted the original files.
 	touch $@
 
 # Step 3. Start Solr server.

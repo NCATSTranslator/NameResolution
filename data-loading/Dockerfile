@@ -10,13 +10,14 @@
 # Use the RENCI Python image to make it easier to work with other
 # RENCI Docker packages and to make sure we have an up to date image.
 # (https://github.com/TranslatorSRI/RENCI-Python-image)
-FROM renciorg/renci-python-image:latest
+FROM ghcr.io/translatorsri/renci-python-image:3.11.5
 
 # Configuration options:
 # - ${ROOT} is where the source code will be copied.
 ARG ROOT=/code/nameres-data-loading
 # - ${SOLR_VERSION} is the SOLR version to install.
-ARG SOLR_VERSION=9.1.0
+#   You can find the latest version at https://solr.apache.org/downloads.html
+ARG SOLR_VERSION=9.10.0
 # - ${SOLR_DIR} is the SOLR directory to use.
 ARG SOLR_DIR=/var/solr
 
