@@ -447,10 +447,10 @@ async def lookup(string: str,
                 "query": query,
                 # qf = query fields, i.e. how should we boost these fields if they contain the query terms.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#qf-query-fields-parameter
-                "qf": "preferred_name_exactish^300 names_exactish^200 preferred_name^10 names^5",
+                "qf": "preferred_name_exactish^400 names_exactish^300 preferred_name^4 names^2",
                 # pf = phrase fields, i.e. how should we boost these fields if they contain query terms close together.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
-                "pf": "preferred_name_exactish^30 names_exactish^20 preferred_name^10 names^5",
+                "pf": "preferred_name_exactish^20 names_exactish^10 preferred_name^4 names^2",
                 "bq": [],
                 "boost": [
                     # Boosts are MULTIPLIED with score -- calculating the log() reduces how quickly this increases
@@ -467,11 +467,11 @@ async def lookup(string: str,
                     "if(gt(clique_identifier_count, 20), 3, 1)",
                     # Slightly boost model organisms: humans, mice, rats, zebrafish and C. elegans
                     '''sum(1,
-                        product(termfreq(taxa,"NCBITaxon:9606"),2),
-                        product(termfreq(taxa,"NCBITaxon:10090"),1.5),
-                        product(termfreq(taxa,"NCBITaxon:10116"),1.4),
-                        product(termfreq(taxa,"NCBITaxon:7955"),1.3),
-                        product(termfreq(taxa,"NCBITaxon:6239"),1.2)
+                        product(termfreq(taxa,"NCBITaxon:9606"),10),
+                        product(termfreq(taxa,"NCBITaxon:10090"),5),
+                        product(termfreq(taxa,"NCBITaxon:10116"),4),
+                        product(termfreq(taxa,"NCBITaxon:7955"),3),
+                        product(termfreq(taxa,"NCBITaxon:6239"),2)
                     )'''
                 ],
             },
