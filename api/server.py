@@ -447,7 +447,7 @@ async def lookup(string: str,
                 "query": query,
                 # qf = query fields, i.e. how should we boost these fields if they contain the query terms.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#qf-query-fields-parameter
-                "qf": "preferred_name_exactish^400 names_exactish^300 preferred_name^4 names^2",
+                "qf": "preferred_name_exactish^500 names_exactish^400 preferred_name^4 names^2",
                 # pf = phrase fields, i.e. how should we boost these fields if they contain query terms close together.
                 # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
                 "pf": "preferred_name_exactish^20 names_exactish^10 preferred_name^4 names^2",
@@ -460,18 +460,18 @@ async def lookup(string: str,
                     # However, this approach causes very large clique_identifier_count entries (like diphenhydramine, cic=1332)
                     # to be returned when we don't have an otherwise good match. So instead we make it stepwise:
                     #   - If clique_identifier_count == 1, we reduce the boost by 0.7x
-                    "if(eq(clique_identifier_count, 1), 0.7, 1)",
+                    # "if(eq(clique_identifier_count, 1), 0.7, 1)",
                     #   - If clique_identifier_count > 10, we boost by a further 2x
-                    "if(gt(clique_identifier_count, 10), 2, 1)",
+                    "if(gt(clique_identifier_count, 20), 5, if(gt(clique_identifier_count, 10), 3, 1))",
                     #   - If clique_identifier_count > 20, we boost by a further 3x
-                    "if(gt(clique_identifier_count, 20), 3, 1)",
                     # Slightly boost model organisms: humans, mice, rats, zebrafish and C. elegans
                     '''sum(1,
-                        product(termfreq(taxa,"NCBITaxon:9606"),10),
-                        product(termfreq(taxa,"NCBITaxon:10090"),5),
-                        product(termfreq(taxa,"NCBITaxon:10116"),4),
-                        product(termfreq(taxa,"NCBITaxon:7955"),3),
-                        product(termfreq(taxa,"NCBITaxon:6239"),2)
+                        if(not(taxon_specific), 100, 0),
+                        product(termfreq(taxa,"NCBITaxon:9606"),100),
+                        product(termfreq(taxa,"NCBITaxon:10090"),40),
+                        product(termfreq(taxa,"NCBITaxon:10116"),30),
+                        product(termfreq(taxa,"NCBITaxon:7955"),20),
+                        product(termfreq(taxa,"NCBITaxon:6239"),10)
                     )'''
                 ],
             },
