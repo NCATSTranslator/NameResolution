@@ -8,7 +8,9 @@
   * Matching names are returned first, followed by non-matching names
 """
 import json
-import logging, warnings
+import logging
+import time
+import warnings
 import os
 import re
 from typing import Dict, List, Union, Annotated, Optional
@@ -19,13 +21,14 @@ import httpx
 from pydantic import BaseModel, conint, Field
 from starlette.middleware.cors import CORSMiddleware
 
-from .apidocs import get_app_info, construct_open_api_schema
+from api.apidocs import get_app_info, construct_open_api_schema
 
 SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
 SOLR_PORT = os.getenv("SOLR_PORT", "8983")
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=os.getenv("LOGLEVEL", logging.INFO))
 
 app.add_middleware(
     CORSMiddleware,
@@ -125,7 +128,7 @@ async def reverse_lookup_get(
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(curies)
+    return await curie_lookup(curies)
 
 
 @app.get(
@@ -135,14 +138,14 @@ async def reverse_lookup_get(
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
-async def lookup_names_get(
+async def synonyms_get(
         preferred_curies: List[str]= Query(
             example=["MONDO:0005737", "MONDO:0009757"],
             description="A list of CURIEs to look up synonyms for."
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(preferred_curies)
+    return await curie_lookup(preferred_curies)
 
 
 @app.post(
@@ -159,7 +162,7 @@ async def lookup_names_post(
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(request.curies)
+    return await curie_lookup(request.curies)
 
 
 @app.post(
@@ -169,17 +172,18 @@ async def lookup_names_post(
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
-async def lookup_names_post(
+async def synonyms_post(
         request: SynonymsRequest = Body(..., example={
             "preferred_curies": ["MONDO:0005737", "MONDO:0009757"],
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(request.preferred_curies)
+    return await curie_lookup(request.preferred_curies)
 
 
-async def reverse_lookup(curies) -> Dict[str, Dict]:
+async def curie_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
+    time_start = time.time_ns()
     query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
@@ -199,6 +203,10 @@ async def reverse_lookup(curies) -> Dict[str, Dict]:
     }
     for doc in response_json["response"]["docs"]:
         output[doc["curie"]] = doc
+    time_end = time.time_ns()
+
+    logging.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)} took {(time_end - time_start)/1_000_000:.2f}ms")
+    
     return output
 
 class LookupResult(BaseModel):
@@ -467,7 +475,7 @@ async def lookup(string: str,
         "fields": "*, score",
         "params": inner_params,
     }
-    logging.debug(f"Query: {json.dumps(params, indent=2)}")
+    logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     async with httpx.AsyncClient(timeout=None) as client:
@@ -476,7 +484,7 @@ async def lookup(string: str,
         logger.error("Solr REST error: %s", response.text)
         response.raise_for_status()
     response = response.json()
-    logging.debug(f"Solr response: {json.dumps(response, indent=2)}")
+    logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
 
     # Associate highlighting information with search results.
     highlighting_response = response.get("highlighting", {})
