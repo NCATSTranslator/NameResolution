@@ -21,11 +21,11 @@ from starlette.middleware.cors import CORSMiddleware
 
 from .apidocs import get_app_info, construct_open_api_schema
 
-LOGGER = logging.getLogger(__name__)
 SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
 SOLR_PORT = os.getenv("SOLR_PORT", "8983")
 
 app = FastAPI(**get_app_info())
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,7 +63,7 @@ async def status() -> Dict:
             'action': 'STATUS'
         })
     if response.status_code >= 300:
-        LOGGER.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
+        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
         response.raise_for_status()
     result = response.json()
 
@@ -473,7 +473,7 @@ async def lookup(string: str,
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
-        LOGGER.error("Solr REST error: %s", response.text)
+        logger.error("Solr REST error: %s", response.text)
         response.raise_for_status()
     response = response.json()
     logging.debug(f"Solr response: {json.dumps(response, indent=2)}")
