@@ -103,7 +103,7 @@ async def status() -> Dict:
             'recent_queries': {
                 'count': len(recent_query_times),
                 'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else -1,
-                'recent_time_ms': list(recent_query_times),
+                'recent_times_ms': list(recent_query_times),
             }
         }
     else:
