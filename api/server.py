@@ -359,6 +359,8 @@ async def lookup(string: str,
         will be returned, rather than filtering to concepts that are both PhenotypicFeature and Disease.
     """
 
+    time_start = time.time_ns()
+
     # First, we strip and lowercase the query since all our indexes are case-insensitive.
     string_lc = string.strip().lower()
 
@@ -477,6 +479,7 @@ async def lookup(string: str,
     }
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
+    time_solr_start = time.time_ns()
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(query_url, json=params)
@@ -484,6 +487,7 @@ async def lookup(string: str,
         logger.error("Solr REST error: %s", response.text)
         response.raise_for_status()
     response = response.json()
+    time_solr_end = time.time_ns()
     logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
 
     # Associate highlighting information with search results.
@@ -526,6 +530,12 @@ async def lookup(string: str,
                            taxa=doc.get("taxa", []),
                            clique_identifier_count=doc.get("clique_identifier_count", 0),
                            types=[f"biolink:{d}" for d in doc.get("types", [])]))
+
+    time_end = time.time_ns()
+    logging.info(f"Lookup query to Solr for {json.dumps(string)} " +
+                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}) "
+                 f"took {(time_end - time_start)/1_000_000:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
+    )
 
     return outputs
 
