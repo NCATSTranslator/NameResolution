@@ -73,7 +73,7 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
             "name":"names_exactish",
             "type":"exactish",
             "indexed":true,
-            "stored":true,
+            "stored":false,
             "multiValued":true
         },
         {
