@@ -1,11 +1,7 @@
-"""Biomedical entity name resolution service.
+"""
+NameResolver (NameRes) API Endpoints
 
-1) split the input into fragments at spaces
-  * The order does not matter
-2) search for names including all fragments, case insensitive
-3) sort by length, ascending
-  * The curie with the shortest match is first, etc.
-  * Matching names are returned first, followed by non-matching names
+Queries are mostly sent to the underlying the NameRes Solr instance.
 """
 import json
 import logging, warnings
