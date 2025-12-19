@@ -4,7 +4,8 @@ NameResolver (NameRes) API Endpoints
 Queries are mostly sent to the underlying the NameRes Solr instance.
 """
 import json
-import logging, warnings
+import logging
+import warnings
 import os
 import re
 from enum import Enum
