@@ -13,6 +13,7 @@ import time
 import warnings
 import os
 import re
+from collections import deque
 from typing import Dict, List, Union, Annotated, Optional
 
 from fastapi import Body, FastAPI, Query
@@ -37,6 +38,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# We track the time taken for each Solr query for the last 1000 queries so we can track performance via /status.
+RECENT_TIMES_COUNT = os.getenv("RECENT_TIMES_COUNT", 1000)
+recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
 
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
@@ -95,6 +100,11 @@ async def status() -> Dict:
             'segmentCount': index.get('segmentCount', ''),
             'lastModified': index.get('lastModified', ''),
             'size': index.get('size', ''),
+            'recent_queries': {
+                'count': len(recent_query_times),
+                'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else -1,
+                'recent_times_ms': list(recent_query_times),
+            }
         }
     else:
         return {
@@ -532,9 +542,11 @@ async def lookup(string: str,
                            types=[f"biolink:{d}" for d in doc.get("types", [])]))
 
     time_end = time.time_ns()
+    time_taken_ms = (time_end - time_start)/1_000_000
+    recent_query_times.append(time_taken_ms)
     logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
                  f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}) "
-                 f"took {(time_end - time_start)/1_000_000:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
+                 f"took {time_taken_ms:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
     )
 
     return outputs
