@@ -47,9 +47,8 @@ async def docs_redirect():
 
 @app.get("/status",
          summary="Get status and counts for this NameRes instance.",
-         description="This endpoint will return status information and a list of counts from the underlying Solr "
-                     "instance for this NameRes instance. "
-                     "You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#status\">API documentation</a>. "
+         description="<p>This endpoint will return status information and a list of counts from the underlying Solr database instance for this NameRes instance.</p>"
+                     "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#status\">API documentation</a>.</p>"
          )
 async def status_get() -> Dict:
     """ Return status and count information from the underyling Solr instance. """
@@ -140,9 +139,9 @@ async def reverse_lookup_get(
 @app.get(
     "/synonyms",
     summary="Look up synonyms for a CURIE.",
-    description="Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm."
-                "You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#bulk-lookup\">API documentation</a>. "
-                "Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.",
+    description="<p>Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm.</p>"
+                "<p>You can find out more about this endpoint in the [API documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#bulk-lookup).</p>"
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.</p>",
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
@@ -176,9 +175,9 @@ async def lookup_names_post(
 @app.post(
     "/synonyms",
     summary="Look up synonyms for a CURIE.",
-    description="Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm. "
-                "You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#synonyms\">API documentation</a>. "
-                "Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.",
+    description="<p>Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm.</p>"
+                "<p>You can find out more about this endpoint in the [API documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#synonyms).</p>"
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.</p>",
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
@@ -234,9 +233,9 @@ class LookupResult(BaseModel):
 
 @app.get("/lookup",
      summary="Look up cliques for a fragment of a name or synonym.",
-     description="Returns cliques with a name or synonym that contains a specified string."
-                 "You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>. "
-                 "Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.",
+     description="<p>Returns cliques with a name or synonym that contains a specified string.</p>"
+                 "<p>You can find out more about this endpoint in the [API documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup).</p>"
+                 "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.</p>",
      response_model=List[LookupResult],
      tags=["lookup"]
 )
@@ -262,7 +261,7 @@ async def lookup_curies_get(
             le=1000
         )] = 10,
         biolink_type: Annotated[Union[List[str], None], Query(
-            description="The Biolink types to filter to (with or without the `biolink:` prefix), "
+            description="The [Biolink Model](https://biolink.github.io/biolink-model/) types to filter to (with or without the `biolink:` prefix), "
                         "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                         "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                         "Disease, not concepts that are both PhenotypicFeature AND Disease.",
@@ -287,7 +286,7 @@ async def lookup_curies_get(
             # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
-            description="Provide debugging information on the Solr query at https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter"
+            description="Provide debugging information on the Solr query as described in [Solr's debug parameters](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter)."
         )] = 'none'
 ) -> List[LookupResult]:
     """
@@ -298,10 +297,10 @@ async def lookup_curies_get(
 
 @app.post("/lookup",
     summary="Look up cliques for a fragment of a name or synonym.",
-    description="Returns cliques with a name or synonym that contains a specified string. "
-                "You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>. "
-                "Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.",
-          response_model=List[LookupResult],
+    description="<p>Returns cliques with a name or synonym that contains a specified string.</p>"
+                "<p>You can find out more about this endpoint in the [API documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup).</p>"
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.</p>",
+    response_model=List[LookupResult],
     tags=["lookup"]
 )
 async def lookup_curies_post(
@@ -326,7 +325,7 @@ async def lookup_curies_post(
             le=1000
         )] = 10,
         biolink_type: Annotated[Union[List[str], None], Query(
-            description="The Biolink types to filter to (with or without the `biolink:` prefix), "
+            description="The [Biolink Model](https://biolink.github.io/biolink-model/) types to filter to (with or without the `biolink:` prefix), "
                         "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                         "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                         "Disease, not concepts that are both PhenotypicFeature AND Disease.",
@@ -351,7 +350,7 @@ async def lookup_curies_post(
             # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
-            description="Provide debugging information on the Solr query at https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter"
+            description="Provide debugging information on the Solr query as per [Solr's debug parameter](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter)."
         )] = 'none'
 ) -> List[LookupResult]:
     """
@@ -617,7 +616,7 @@ class NameResQuery(BaseModel):
     )
     biolink_types: Optional[List[str]] = Field(
         [],
-        description="The Biolink types to filter to (with or without the `biolink:` prefix), "
+        description="The [Biolink Model](https://biolink.github.io/biolink-model/) types to filter to (with or without the `biolink:` prefix), "
                     "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                     "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                     "Disease, not concepts that are both PhenotypicFeature AND Disease.",
@@ -643,15 +642,15 @@ class NameResQuery(BaseModel):
     )
     debug: Optional[DebugOptions] = Field(
         'none',
-        description="Provide debugging information on the Solr query as per https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter"
+        description="Provide debugging information on the Solr query as per [Solr's debug parameter](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter)."
     )
 
 
 @app.post("/bulk-lookup",
           summary="Look up cliques for a fragment of multiple names or synonyms.",
-          description="Returns cliques for each query."
-                      "You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#bulk-lookup\">API documentation</a>. "
-                      "Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.",
+          description="<p>Returns cliques for each query.</p>"
+                      "<p>You can find out more about this endpoint in the [API documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#bulk-lookup).</p>"
+                      "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See [Conflation documentation](https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation) for more information.</p>",
           response_model=Dict[str, List[LookupResult]],
           tags=["lookup"]
 )

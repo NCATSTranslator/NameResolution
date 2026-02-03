@@ -290,3 +290,27 @@ POST /synonyms with body:
 - CURIEs are conflated with both GeneProtein and DrugChemical conflation. For example, when looking up a protein CURIE, the synonyms for the gene that encodes the protein will also be included. See the [Conflation section](#conflation) for more information.
 - If a CURIE is not found in the database, it will still appear in the response dictionary with an empty object as its value.
 - For large batches of CURIEs, consider using this endpoint instead of making individual requests, as it is optimized for batch lookups.
+
+## Health endpoints
+
+### `/status`
+
+Returns the status of the service. Most importantly, this returns the [Babel](https://github.com/NCATSTranslator/Babel)
+version and changelog URL, which can be used to determine which version of Babel is currently loaded in this service.
+
+```json
+{
+  "status": "ok",
+  "message": "Reporting results from primary core.",
+  "babel_version": "2025sep1",
+  "babel_version_url": "https://github.com/ncatstranslator/Babel/blob/master/releases/2025sep1.md",
+  "startTime": "2025-12-19T11:53:09.638Z",
+  "numDocs": 425583391,
+  "maxDoc": 425586610,
+  "deletedDocs": 3219,
+  "version": 34838,
+  "segmentCount": 57,
+  "lastModified": "2025-09-24T19:09:56.524Z",
+  "size": "142.17 GB"
+}
+```
