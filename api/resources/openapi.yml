@@ -6,12 +6,15 @@ info:
   name: Chris Bizon
   x-id: https://github.com/cbizon
   x-role: responsible developer
-  description: 'Name Resolution/Name Lookup service<p/>This service takes lexical strings and attempts to map them to identifiers
-    (CURIEs) from a vocabulary or ontology.  The lookup is not exact, but includes partial matches.<p/>
-     Multiple results may be returned representing possible conceptual matches, but all of the identifiers
-     have been correctly normalized using the
-     <a href="https://github.com/TranslatorSRI/NodeNormalization">Node Normalization</a> service. You can read more
-     about this API on the <a href="https://github.com/NCATSTranslator/NameResolution">NameResolution GitHub repository</a>.'
+  description: 'Name Resolver (Name Lookup) service<p/>This service takes lexical strings and attempts to map them to identifiers
+    (CURIEs) from a vocabulary or ontology. An optional autocomplete mode (which assumes the query is incomplete) is available,
+    along with many other options. Given a preferred CURIE, the known synonyms of that CURIE can also be retrieved.<p/>
+    Multiple results may be returned representing possible conceptual matches, but all of the identifiers
+    have been correctly normalized using the
+    <a href="https://github.com/TranslatorSRI/NodeNormalization">Node Normalization</a> service.<p/>You can read more
+    about this API on the <a href="https://github.com/NCATSTranslator/NameResolution">NameResolution GitHub repository</a>.<p/>
+    Note that the returned by this service have been conflated using both GeneProtein and DrugChemical conflation;
+    you can read more about this at the <a href="https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md">Conflation documentation</a>.'
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
