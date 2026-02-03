@@ -261,7 +261,7 @@ async def lookup_curies_get(
             le=1000
         )] = 10,
         biolink_type: Annotated[Union[List[str], None], Query(
-            description="The [Biolink Model](https://biolink.github.io/biolink-model/) types to filter to (with or without the `biolink:` prefix), "
+            description="The <a href=\"https://biolink.github.io/biolink-model/\">Biolink Model</a> types to filter to (with or without the `biolink:` prefix), "
                         "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                         "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                         "Disease, not concepts that are both PhenotypicFeature AND Disease.",
@@ -286,7 +286,7 @@ async def lookup_curies_get(
             # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
-            description="Provide debugging information on the Solr query as described in [Solr's debug parameters](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter)."
+            description="Provide debugging information on the Solr query as described in <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameters</a>."
         )] = 'none'
 ) -> List[LookupResult]:
     """
@@ -325,7 +325,7 @@ async def lookup_curies_post(
             le=1000
         )] = 10,
         biolink_type: Annotated[Union[List[str], None], Query(
-            description="The [Biolink Model](https://biolink.github.io/biolink-model/) types to filter to (with or without the `biolink:` prefix), "
+            description="The <a href=\"https://biolink.github.io/biolink-model/\">Biolink Model</a> types to filter to (with or without the `biolink:` prefix), "
                         "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                         "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                         "Disease, not concepts that are both PhenotypicFeature AND Disease.",
@@ -350,7 +350,7 @@ async def lookup_curies_post(
             # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
-            description="Provide debugging information on the Solr query as per [Solr's debug parameter](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter)."
+            description="Provide debugging information on the Solr query as per <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameter</a>."
         )] = 'none'
 ) -> List[LookupResult]:
     """
@@ -616,7 +616,7 @@ class NameResQuery(BaseModel):
     )
     biolink_types: Optional[List[str]] = Field(
         [],
-        description="The [Biolink Model](https://biolink.github.io/biolink-model/) types to filter to (with or without the `biolink:` prefix), "
+        description="The <a href=\"https://biolink.github.io/biolink-model/\">Biolink Model</a> types to filter to (with or without the `biolink:` prefix), "
                     "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                     "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                     "Disease, not concepts that are both PhenotypicFeature AND Disease.",
@@ -642,7 +642,7 @@ class NameResQuery(BaseModel):
     )
     debug: Optional[DebugOptions] = Field(
         'none',
-        description="Provide debugging information on the Solr query as per [Solr's debug parameter](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter)."
+        description="Provide debugging information on the Solr query as per <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameter</a>."
     )
 
 
