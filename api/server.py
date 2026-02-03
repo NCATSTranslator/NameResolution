@@ -128,7 +128,7 @@ class SynonymsRequest(BaseModel):
 )
 async def reverse_lookup_get(
         curies: List[str]= Query(
-            example=["MONDO:0005737", "MONDO:0009757"],
+            examples=["MONDO:0005737", "MONDO:0009757"],
             description="A list of CURIEs to look up synonyms for."
         )
 ) -> Dict[str, Dict]:
@@ -145,7 +145,7 @@ async def reverse_lookup_get(
 )
 async def synonyms_get(
         preferred_curies: List[str]= Query(
-            example=["MONDO:0005737", "MONDO:0009757"],
+            examples=["MONDO:0005737", "MONDO:0009757"],
             description="A list of CURIEs to look up synonyms for."
         )
 ) -> Dict[str, Dict]:
@@ -162,7 +162,7 @@ async def synonyms_get(
     deprecated=True,
 )
 async def lookup_names_post(
-        request: Request = Body(..., example={
+        request: Request = Body(..., examples={
             "curies": ["MONDO:0005737", "MONDO:0009757"],
         }),
 ) -> Dict[str, Dict]:
@@ -178,7 +178,7 @@ async def lookup_names_post(
     tags=["lookup"],
 )
 async def synonyms_post(
-        request: SynonymsRequest = Body(..., example={
+        request: SynonymsRequest = Body(..., examples={
             "preferred_curies": ["MONDO:0005737", "MONDO:0009757"],
         }),
 ) -> Dict[str, Dict]:
@@ -261,23 +261,23 @@ async def lookup_curies_get(
                         "Disease, not concepts that are both PhenotypicFeature AND Disease.",
             # We can't use `example` here because otherwise it gets filled in when you click "Try it out",
             # which is easy to overlook.
-            # example=["biolink:Disease", "biolink:PhenotypicFeature"]
+            # examples=["biolink:Disease", "biolink:PhenotypicFeature"]
         )] = [],
         only_prefixes: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of prefixes to filter to, e.g. `MONDO|EFO`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="MONDO|EFO"
+            # examples="MONDO|EFO"
         )] = None,
         exclude_prefixes: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of prefixes to exclude, e.g. `UMLS|EFO`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="UMLS|EFO"
+            # examples="UMLS|EFO"
         )] = None,
         only_taxa: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of taxa to filter, "
                         "e.g. `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
+            # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
             description="Provide debugging information on the Solr query at https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter"
@@ -325,23 +325,23 @@ async def lookup_curies_post(
                         "Disease, not concepts that are both PhenotypicFeature AND Disease.",
             # We can't use `example` here because otherwise it gets filled in when you click "Try it out",
             # which is easy to overlook.
-            # example=["biolink:Disease", "biolink:PhenotypicFeature"]
+            # examples=["biolink:Disease", "biolink:PhenotypicFeature"]
         )] = [],
         only_prefixes: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of prefixes to filter to, e.g. `MONDO|EFO`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="MONDO|EFO"
+            # examples="MONDO|EFO"
         )] = None,
         exclude_prefixes: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of prefixes to exclude, e.g. `UMLS|EFO`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="UMLS|EFO"
+            # examples="UMLS|EFO"
         )] = None,
         only_taxa: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of taxa to filter, "
                         "e.g. `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
+            # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
             description="Provide debugging information on the Solr query at https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter"
@@ -619,20 +619,20 @@ class NameResQuery(BaseModel):
         "",
         description="Pipe-separated, case-sensitive list of prefixes to filter to, e.g. `MONDO|EFO`.",
         # We can't use `example` here because otherwise it gets filled in when filling this in.
-        # example="MONDO|EFO"
+        # examples="MONDO|EFO"
     )
     exclude_prefixes: Optional[str] = Field(
         "",
         description="Pipe-separated, case-sensitive list of prefixes to exclude, e.g. `UMLS|EFO`.",
         # We can't use `example` here because otherwise it gets filled in when filling this in.
-        # example="UMLS|EFO"
+        # examples="UMLS|EFO"
     )
     only_taxa: Optional[str] = Query(
         "",
         description="Pipe-separated, case-sensitive list of taxa to filter, "
                     "e.g. `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`.",
         # We can't use `example` here because otherwise it gets filled in when filling this in.
-        # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
+        # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
     )
     debug: Optional[DebugOptions] = Field(
         'none',
