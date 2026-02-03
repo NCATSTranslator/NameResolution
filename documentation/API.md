@@ -229,8 +229,9 @@ Search for cliques for multiple strings in a single request.
 
 **Example request:**
 
+POST `/bulk-lookup` with body:
+
 ```json
-POST /bulk-lookup
 {
   "strings": ["diabetes", "hypertension", "asthma"],
   "limit": 5,
@@ -299,9 +300,8 @@ GET request to look up multiple CURIEs:
 GET /synonyms?preferred_curies=MONDO:0005148&preferred_curies=NCBIGene:1756
 ```
 
-POST request:
+POST /synonyms with body:
 ```json
-POST /synonyms
 {
   "preferred_curies": ["MONDO:0005148", "NCBIGene:1756"]
 }
