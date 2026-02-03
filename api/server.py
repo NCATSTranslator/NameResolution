@@ -210,7 +210,7 @@ async def curie_lookup(curies) -> Dict[str, Dict]:
         output[doc["curie"]] = doc
     time_end = time.time_ns()
 
-    logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)} took {(time_end - time_start)/1_000_000:.2f}ms")
+    logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)}: took {(time_end - time_start)/1_000_000:.2f}ms")
 
     return output
 
@@ -571,7 +571,7 @@ async def lookup(string: str,
 
     time_end = time.time_ns()
     logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
-                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}) "
+                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
                  f"took {(time_end - time_start)/1_000_000:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
     )
 
@@ -662,7 +662,7 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             query.only_taxa,
             query.debug)
     time_end = time.time_ns()
-    logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}) took {(time_end - time_start)/1_000_000:.2f}ms")
+    logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}): took {(time_end - time_start)/1_000_000:.2f}ms")
     return result
 
 
