@@ -547,7 +547,7 @@ async def lookup(string: str,
         # Prepare debugging and explain information for this request.
         debug_for_this_request = response.get('debug', None)
         explain_for_this_doc = None
-        if debug == 'explain' or debug == 'all':
+        if debug in {DebugOptions.results, DebugOptions.all}:
             if doc['id'] in explain_info:
                 explain_for_this_doc = explain_info[doc['id']]
 
