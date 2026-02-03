@@ -128,7 +128,9 @@ Search for cliques by a fragment of a name or synonym.
 - `types`: A list of Biolink types for this concept (prefixed with `biolink:`).
 - `clique_identifier_count`: The number of identifiers in this clique.
 - `explain`: Explanation of the score for this result (only included if `debug` is `results` or `all`).
-- `debug`: Debugging information for the entire query (only included if `debug` is `results` or `all`).
+- `debug`: Debugging information for the entire query (only included if `debug` is not `none`). To avoid duplication, explains within this structure will be replaced with a `{"_comment": "..."}`.
+  - `timing`: Providing timing information for the Solr query (only included if `debug` is `timing` or `all`).
+  - `parsedquery`: The parsed query string (only included if `debug` is `query` or `all`).
 
 **Example requests:**
 
