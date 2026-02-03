@@ -1,7 +1,7 @@
 openapi: 3.0.2
 info:
   title: Name Resolver
-  version: 1.5.1
+  version: 1.6.0
   email: bizon@renci.org
   name: Chris Bizon
   x-id: https://github.com/cbizon

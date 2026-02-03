@@ -6,6 +6,7 @@ Queries are mostly sent to the underlying the NameRes Solr instance.
 import json
 import logging
 import warnings
+import time
 import os
 import re
 from enum import Enum
@@ -17,13 +18,14 @@ import httpx
 from pydantic import BaseModel, conint, Field
 from starlette.middleware.cors import CORSMiddleware
 
-from .apidocs import get_app_info, construct_open_api_schema
+from api.apidocs import get_app_info, construct_open_api_schema
 
-LOGGER = logging.getLogger(__name__)
 SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
 SOLR_PORT = os.getenv("SOLR_PORT", "8983")
 
 app = FastAPI(**get_app_info())
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=os.getenv("LOGLEVEL", logging.INFO))
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,7 +63,7 @@ async def status() -> Dict:
             'action': 'STATUS'
         })
     if response.status_code >= 300:
-        LOGGER.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
+        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
         response.raise_for_status()
     result = response.json()
 
@@ -131,7 +133,7 @@ async def reverse_lookup_get(
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(curies)
+    return await curie_lookup(curies)
 
 
 @app.get(
@@ -141,14 +143,14 @@ async def reverse_lookup_get(
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
-async def lookup_names_get(
+async def synonyms_get(
         preferred_curies: List[str]= Query(
             example=["MONDO:0005737", "MONDO:0009757"],
             description="A list of CURIEs to look up synonyms for."
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(preferred_curies)
+    return await curie_lookup(preferred_curies)
 
 
 @app.post(
@@ -165,7 +167,7 @@ async def lookup_names_post(
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(request.curies)
+    return await curie_lookup(request.curies)
 
 
 @app.post(
@@ -175,17 +177,18 @@ async def lookup_names_post(
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
-async def lookup_names_post(
+async def synonyms_post(
         request: SynonymsRequest = Body(..., example={
             "preferred_curies": ["MONDO:0005737", "MONDO:0009757"],
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(request.preferred_curies)
+    return await curie_lookup(request.preferred_curies)
 
 
-async def reverse_lookup(curies) -> Dict[str, Dict]:
+async def curie_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
+    time_start = time.time_ns()
     query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
@@ -205,6 +208,10 @@ async def reverse_lookup(curies) -> Dict[str, Dict]:
     }
     for doc in response_json["response"]["docs"]:
         output[doc["curie"]] = doc
+    time_end = time.time_ns()
+
+    logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)} took {(time_end - time_start)/1_000_000:.2f}ms")
+
     return output
 
 class LookupResult(BaseModel):
@@ -368,6 +375,8 @@ async def lookup(string: str,
         will be returned, rather than filtering to concepts that are both PhenotypicFeature and Disease.
     """
 
+    time_start = time.time_ns()
+
     # First, we strip and lowercase the query since all our indexes are case-insensitive.
     string_lc = string.strip().lower()
 
@@ -431,10 +440,18 @@ async def lookup(string: str,
     # Taxa filter.
     # only_taxa is like: 'NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955'
     if only_taxa:
-        taxa_filters = []
-        for taxon in re.split('\\s*\\|\\s*', only_taxa):
-            taxa_filters.append(f'taxa:"{taxon}"')
-        filters.append(" OR ".join(taxa_filters))
+        taxon_ids = re.split('\\s*\\|\\s*', only_taxa)
+        if taxon_ids:
+            taxa_filters = []
+
+            for taxon in taxon_ids:
+                taxa_filters.append(f'taxa:"{taxon}"')
+
+            # We also need to include entries that don't have taxa specified.
+            taxa_filters.append('taxon_specific:false')
+
+            # Combine all taxa filters.
+            filters.append('(' + " OR ".join(taxa_filters) + ')')
 
     # Turn on highlighting if requested.
     inner_params = {}
@@ -479,22 +496,24 @@ async def lookup(string: str,
         "fields": "*, score",
         "params": inner_params,
     }
+    logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
-    print(f"Query: {json.dumps(params, indent=2)}")
-
+    time_solr_start = time.time_ns()
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
-        LOGGER.error("Solr REST error: %s", response.text)
+        logger.error("Solr REST error: %s", response.text)
         response.raise_for_status()
     response = response.json()
-    print(f"Solr response: {json.dumps(response, indent=2)}")
 
     # Do we have any debug.explain information?
     explain_info = {}
     if 'debug' in response and 'explain' in response['debug']:
         explain_info = response['debug']['explain']
+
+    time_solr_end = time.time_ns()
+    logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
 
     # Associate highlighting information with search results.
     highlighting_response = response.get("highlighting", {})
@@ -549,6 +568,12 @@ async def lookup(string: str,
                            types=[f"biolink:{d}" for d in doc.get("types", [])],
                            explain=explain_for_this_doc,
                            debug=debug_for_this_request))
+
+    time_end = time.time_ns()
+    logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
+                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}) "
+                 f"took {(time_end - time_start)/1_000_000:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
+    )
 
     return outputs
 
@@ -622,6 +647,7 @@ class NameResQuery(BaseModel):
           tags=["lookup"]
 )
 async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
+    time_start = time.time_ns()
     result = {}
     for string in query.strings:
         result[string] = await lookup(
@@ -635,6 +661,8 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             query.exclude_prefixes,
             query.only_taxa,
             query.debug)
+    time_end = time.time_ns()
+    logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}) took {(time_end - time_start)/1_000_000:.2f}ms")
     return result
 
 
