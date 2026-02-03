@@ -1,5 +1,5 @@
 """
-NameResolver (NameRes) API Endpoints
+Name Resolver (Name Lookup, NameRes) API Endpoints
 
 Queries are mostly sent to the underlying the NameRes Solr instance.
 """
