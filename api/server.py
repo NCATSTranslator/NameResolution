@@ -15,7 +15,7 @@ from typing import Dict, List, Union, Annotated, Optional
 from fastapi import Body, FastAPI, Query
 from fastapi.responses import RedirectResponse
 import httpx
-from pydantic import BaseModel, conint, Field
+from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from api.apidocs import get_app_info, construct_open_api_schema
@@ -364,7 +364,7 @@ async def lookup(string: str,
            autocomplete: bool = False,
            highlighting: bool = False,
            offset: int = 0,
-           limit: conint(le=1000) = 10,
+           limit: Annotated[int, Field(strict=True, gt=0, le=1000)] = 10,
            biolink_types: List[str] = None,
            only_prefixes: str = "",
            exclude_prefixes: str = "",
