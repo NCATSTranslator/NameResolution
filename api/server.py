@@ -227,7 +227,7 @@ class LookupResult(BaseModel):
     types: List[str]
     score: float
     clique_identifier_count: int
-    explain: Optional[str]    # Explanation for this specific result
+    explain: Optional[dict]   # Explanation for this specific result
     debug: Optional[dict]     # The debug information for the entire query
 
 
@@ -475,6 +475,9 @@ async def lookup(string: str,
 
     if debug and debug != 'none':
         inner_params['debug'] = debug
+
+        # Rather than returning the explain as a string, return it as structured JSON.
+        inner_params['debug.explain.structured'] = 'true'
 
     params = {
         "query": {

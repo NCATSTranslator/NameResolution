@@ -30,8 +30,10 @@ def check_debug_output(debug_value, response):
     if debug_value in ["results", "all"]:
         explain = response.get('explain')
         assert explain is not None
-        assert isinstance(explain, str)
-        assert explain.startswith("\n")
+        assert isinstance(explain, dict)
+        assert isinstance(explain.get('description'), str)
+        assert isinstance(explain.get('details'), list)
+        assert explain.get('details') != []
 
     if debug_value in ["query", "all"]:
         parsed_query = response.get('debug').get('parsedquery_toString')
