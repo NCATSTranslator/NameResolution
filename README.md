@@ -1,12 +1,12 @@
-# Name resolution service
+# Name Resolver
 
-This service takes lexical strings and attempts to map them to identifiers (curies) from a vocabulary or ontology.  
-The lookup is not exact, but includes partial matches.
+Name Resolver (Name Lookup or NameRes) takes lexical strings and attempts to map them to identifiers (CURIEs) from a vocabulary or ontology. An optional autocomplete mode (which assumes the query is incomplete) is available,
+along with many other options. Given a preferred CURIE, the known synonyms of that CURIE can also be retrieved.
+Multiple results may be returned representing possible conceptual matches, but all of the identifiers have been correctly normalized using the [Node Normalization](https://github.com/NCATSTranslator/NodeNormalization) service.
 
-Multiple results may be returned representing possible conceptual matches, but all of the identifiers have been 
-correctly normalized using the [NodeNormalization service](https://nodenormalization-sri.renci.org/apidocs).
+Note that the results returned by this service have been conflated using both GeneProtein and DrugChemical conflation; you can read more about this at the [Conflation documentation](https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md).
 
-See the documentation [notebook](documentation/NameResolution.ipynb) for examples of use.
+See the documentation [Jupyter Notebook](documentation/NameResolution.ipynb) for examples of use.
 
 ## Setting up NameRes locally
 
