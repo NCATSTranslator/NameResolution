@@ -144,10 +144,196 @@ This boost ranges from log(2) = 0.3 for a clique that only has a single identifi
 
 ## Search endpoints
 
+The search endpoints allow you to search for concepts by a fragment of a name or synonym. These endpoints use Solr's extended Dismax query parser to search for matches across preferred names and synonyms, with support for highlighting, filtering, pagination, and debugging.
+
 ### `/lookup`
+
+Search for cliques by a fragment of a name or synonym.
+
+**Endpoint:** `GET /lookup` or `POST /lookup`
+
+**Parameters:**
+
+- `string` (required, string): The string to search for.
+- `autocomplete` (optional, boolean, default: false): If `true`, treats the input string as incomplete and looks for terms that start with the final word. If `false`, treats the entire phrase as complete (entity linker mode).
+- `highlighting` (optional, boolean, default: false): If `true`, returns information on which labels and synonyms matched the search query.
+- `offset` (optional, integer, default: 0, minimum: 0): The number of results to skip. Used for pagination.
+- `limit` (optional, integer, default: 10, minimum: 0, maximum: 1000): The maximum number of results to return. Used for pagination.
+- `biolink_type` (optional, list of strings): Filter results to specific Biolink types. Types can be specified with or without the `biolink:` prefix (e.g., `biolink:Disease` or `Disease`). Multiple types are combined with OR logic, so filtering for `PhenotypicFeature` and `Disease` will return concepts that are either phenotypic features OR diseases.
+- `only_prefixes` (optional, string): Pipe-separated, case-sensitive list of CURIE prefixes to include (e.g., `MONDO|EFO`). Only results with matching prefixes will be returned.
+- `exclude_prefixes` (optional, string): Pipe-separated, case-sensitive list of CURIE prefixes to exclude (e.g., `UMLS|EFO`). Results with matching prefixes will be filtered out.
+- `only_taxa` (optional, string): Pipe-separated, case-sensitive list of taxa to filter to (e.g., `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`). Results without a specified taxon or with a matching taxon will be included.
+- `debug` (optional, string, one of: `none`, `query`, `timing`, `results`, `all`, default: `none`): Return debugging information from the underlying Solr query. See [Solr debug documentation](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter) for details.
+
+**Returns:** A list of `LookupResult` objects, each containing:
+- `curie`: The CURIE of the concept.
+- `label`: The preferred name of the concept.
+- `highlighting`: An object with `labels` and `synonyms` arrays showing which matches were found (only included if `highlighting=true`).
+- `synonyms`: A list of all known synonyms for this concept.
+- `score`: The Solr search score for this result.
+- `taxa`: A list of taxa associated with this concept.
+- `types`: A list of Biolink types for this concept (prefixed with `biolink:`).
+- `clique_identifier_count`: The number of identifiers in this clique.
+- `explain`: Explanation of the score for this result (only included if `debug` is `results` or `all`).
+- `debug`: Debugging information for the entire query (only included if `debug` is `results` or `all`).
+
+**Example requests:**
+
+GET request to search for "diabetes":
+```
+GET /lookup?string=diabetes&limit=5
+```
+
+POST request to search for "cancer" with filters:
+```
+POST /lookup?string=cancer&biolink_type=Disease&only_prefixes=MONDO&limit=10
+```
+
+GET request with autocomplete enabled:
+```
+GET /lookup?string=dmd&autocomplete=true&highlighting=true
+```
+
+**Notes:**
+- CURIEs are conflated with both GeneProtein and DrugChemical conflation. For example, when searching for a protein, the identifier of the gene that encodes the protein may also be returned. See the [Conflation section](#conflation) for more information.
+- Search results are sorted by score (descending), then by clique identifier count (descending), then by CURIE suffix (ascending).
 
 ### `/bulk-lookup`
 
+Search for cliques for multiple strings in a single request.
+
+**Endpoint:** `POST /bulk-lookup`
+
+**Request body:** A JSON object with a `NameResQuery` structure:
+
+```json
+{
+  "strings": ["diabetes", "cancer"],
+  "autocomplete": false,
+  "highlighting": false,
+  "offset": 0,
+  "limit": 10,
+  "biolink_types": [],
+  "only_prefixes": "",
+  "exclude_prefixes": "",
+  "only_taxa": "",
+  "debug": "none"
+}
+```
+
+**Parameters:** Same as `/lookup`, except:
+- `strings` (required, list of strings): A list of strings to search for. The returned results will be in a dictionary with these values as keys.
+- All other parameters are optional and apply to all searches.
+
+**Returns:** A dictionary where each key is a string from the input `strings` array, and each value is a list of `LookupResult` objects (same structure as `/lookup` results).
+
+**Example request:**
+
+```json
+POST /bulk-lookup
+{
+  "strings": ["diabetes", "hypertension", "asthma"],
+  "limit": 5,
+  "biolink_types": ["Disease"]
+}
+```
+
+**Example response:**
+
+```json
+{
+  "diabetes": [
+    {
+      "curie": "MONDO:0005148",
+      "label": "diabetes mellitus",
+      "highlighting": {},
+      "synonyms": ["diabetes", ...],
+      "score": 42.5,
+      "taxa": [],
+      "types": ["biolink:Disease", ...],
+      "clique_identifier_count": 125
+    },
+    ...
+  ],
+  "hypertension": [...],
+  "asthma": [...]
+}
+```
+
+**Notes:**
+- This endpoint is useful for batch processing multiple queries at once, which can be more efficient than making multiple `/lookup` requests.
+- All results for a given string share the same filter and search parameters.
+
 ## Lookup endpoints
 
+The lookup endpoints allow you to retrieve all synonyms and information for a known CURIE (concept unique resource identifier). Unlike the search endpoints, these do not perform text matching; they retrieve data for exact CURIEs.
+
 ### `/synonyms`
+
+Look up all synonyms and information for a CURIE.
+
+**Endpoint:** `GET /synonyms` or `POST /synonyms`
+
+**Parameters:**
+
+- `preferred_curies` (required, list of strings): A list of CURIEs to look up synonyms for. You can normalize a CURIE to a preferred CURIE using [NodeNorm](https://nodenormalization-sri.renci.org/).
+
+**Returns:** A dictionary where each key is a CURIE from the input list, and each value is a document object containing:
+- `curie`: The CURIE identifier.
+- `preferred_name`: The preferred name for this concept.
+- `names`: A list of all known synonyms for this concept.
+- `types`: A list of Biolink types for this concept.
+- `taxa`: A list of taxa associated with this concept.
+- `clique_identifier_count`: The number of identifiers in this clique.
+- Additional metadata fields such as `curie_suffix`, `id`, and `_version_`.
+
+**Example requests:**
+
+GET request to look up a single CURIE:
+```
+GET /synonyms?preferred_curies=NCBIGene:1756
+```
+
+GET request to look up multiple CURIEs:
+```
+GET /synonyms?preferred_curies=MONDO:0005148&preferred_curies=NCBIGene:1756
+```
+
+POST request:
+```json
+POST /synonyms
+{
+  "preferred_curies": ["MONDO:0005148", "NCBIGene:1756"]
+}
+```
+
+**Example response:**
+
+```json
+{
+  "MONDO:0005148": {
+    "curie": "MONDO:0005148",
+    "preferred_name": "diabetes mellitus",
+    "names": ["diabetes mellitus", "diabetes", "DM", ...],
+    "types": ["Disease", "DiseaseOrPhenotypicFeature", ...],
+    "taxa": [],
+    "clique_identifier_count": 125,
+    ...
+  },
+  "NCBIGene:1756": {
+    "curie": "NCBIGene:1756",
+    "preferred_name": "DMD",
+    "names": ["DMD", "dystrophin", "BMD", ...],
+    "types": ["Gene", "GeneOrGeneProduct", ...],
+    "taxa": ["NCBITaxon:9606"],
+    "clique_identifier_count": 22,
+    ...
+  }
+}
+```
+
+**Notes:**
+- This endpoint provides a complete view of all synonyms and properties for a given concept.
+- CURIEs are conflated with both GeneProtein and DrugChemical conflation. For example, when looking up a protein CURIE, the synonyms for the gene that encodes the protein will also be included. See the [Conflation section](#conflation) for more information.
+- If a CURIE is not found in the database, it will still appear in the response dictionary with an empty object as its value.
+- For large batches of CURIEs, consider using this endpoint instead of making individual requests, as it is optimized for batch lookups.
