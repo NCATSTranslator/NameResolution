@@ -1,24 +1,21 @@
-"""Biomedical entity name resolution service.
+"""
+Name Resolver (Name Lookup, NameRes) API Endpoints
 
-1) split the input into fragments at spaces
-  * The order does not matter
-2) search for names including all fragments, case insensitive
-3) sort by length, ascending
-  * The curie with the shortest match is first, etc.
-  * Matching names are returned first, followed by non-matching names
+Queries are mostly sent to the underlying the NameRes Solr instance.
 """
 import json
 import logging
-import time
 import warnings
+import time
 import os
 import re
+from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
 
 from fastapi import Body, FastAPI, Query
 from fastapi.responses import RedirectResponse
 import httpx
-from pydantic import BaseModel, conint, Field
+from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from api.apidocs import get_app_info, construct_open_api_schema
@@ -50,8 +47,8 @@ async def docs_redirect():
 
 @app.get("/status",
          summary="Get status and counts for this NameRes instance.",
-         description="This endpoint will return status information and a list of counts from the underlying Solr "
-                     "instance for this NameRes instance."
+         description="<p>This endpoint will return status information and a list of counts from the underlying Solr database instance for this NameRes instance.</p>"
+                     "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#status\">API documentation</a>.</p>"
          )
 async def status_get() -> Dict:
     """ Return status and count information from the underyling Solr instance. """
@@ -105,6 +102,14 @@ async def status() -> Dict:
 
 # ENDPOINT /reverse_lookup
 
+class DebugOptions(str, Enum):
+    # A list of possible Solr debug options from https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter
+    none = "none"
+    query = "query"
+    timing = "timing"
+    results = "results"
+    all = "all"
+
 class Request(BaseModel):
     """Reverse-lookup request body."""
     curies: List[str]
@@ -116,14 +121,14 @@ class SynonymsRequest(BaseModel):
 @app.get(
     "/reverse_lookup",
     summary="Look up synonyms for a CURIE.",
-    description="Returns a list of synonyms for a particular CURIE.",
+    description="Returns a list of synonyms for a particular CURIE. This endpoint is deprecated; please use /synonyms instead.",
     response_model=Dict[str, Dict],
     tags=["lookup"],
     deprecated=True,
 )
 async def reverse_lookup_get(
         curies: List[str]= Query(
-            example=["MONDO:0005737", "MONDO:0009757"],
+            examples=["MONDO:0005737", "MONDO:0009757"],
             description="A list of CURIEs to look up synonyms for."
         )
 ) -> Dict[str, Dict]:
@@ -134,13 +139,15 @@ async def reverse_lookup_get(
 @app.get(
     "/synonyms",
     summary="Look up synonyms for a CURIE.",
-    description="Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm.",
+    description="<p>Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm.</p>"
+                "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#bulk-lookup\">API documentation</a>.</p>"
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
 async def synonyms_get(
         preferred_curies: List[str]= Query(
-            example=["MONDO:0005737", "MONDO:0009757"],
+            examples=["MONDO:0005737", "MONDO:0009757"],
             description="A list of CURIEs to look up synonyms for."
         )
 ) -> Dict[str, Dict]:
@@ -151,13 +158,13 @@ async def synonyms_get(
 @app.post(
     "/reverse_lookup",
     summary="Look up synonyms for a CURIE.",
-    description="Returns a list of synonyms for a particular CURIE.",
+    description="Returns a list of synonyms for a particular CURIE. This endpoint is deprecated; please use /synonyms instead.",
     response_model=Dict[str, Dict],
     tags=["lookup"],
     deprecated=True,
 )
 async def lookup_names_post(
-        request: Request = Body(..., example={
+        request: Request = Body(..., examples={
             "curies": ["MONDO:0005737", "MONDO:0009757"],
         }),
 ) -> Dict[str, Dict]:
@@ -168,12 +175,14 @@ async def lookup_names_post(
 @app.post(
     "/synonyms",
     summary="Look up synonyms for a CURIE.",
-    description="Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm.",
+    description="<p>Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm.</p>"
+                "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#synonyms\">API documentation</a>.</p>"
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
 async def synonyms_post(
-        request: SynonymsRequest = Body(..., example={
+        request: SynonymsRequest = Body(..., examples={
             "preferred_curies": ["MONDO:0005737", "MONDO:0009757"],
         }),
 ) -> Dict[str, Dict]:
@@ -205,8 +214,8 @@ async def curie_lookup(curies) -> Dict[str, Dict]:
         output[doc["curie"]] = doc
     time_end = time.time_ns()
 
-    logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)} took {(time_end - time_start)/1_000_000:.2f}ms")
-    
+    logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)}: took {(time_end - time_start)/1_000_000:.2f}ms")
+
     return output
 
 class LookupResult(BaseModel):
@@ -218,11 +227,15 @@ class LookupResult(BaseModel):
     types: List[str]
     score: float
     clique_identifier_count: int
+    explain: Optional[dict]   # Explanation for this specific result
+    debug: Optional[dict]     # The debug information for the entire query
 
 
 @app.get("/lookup",
      summary="Look up cliques for a fragment of a name or synonym.",
-     description="Returns cliques with a name or synonym that contains a specified string.",
+     description="<p>Returns cliques with a name or synonym that contains a specified string.</p>"
+                 "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>.</p>"
+                 "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
      response_model=List[LookupResult],
      tags=["lookup"]
 )
@@ -248,40 +261,45 @@ async def lookup_curies_get(
             le=1000
         )] = 10,
         biolink_type: Annotated[Union[List[str], None], Query(
-            description="The Biolink types to filter to (with or without the `biolink:` prefix), "
+            description="The <a href=\"https://biolink.github.io/biolink-model/\">Biolink Model</a> types to filter to (with or without the `biolink:` prefix), "
                         "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                         "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                         "Disease, not concepts that are both PhenotypicFeature AND Disease.",
             # We can't use `example` here because otherwise it gets filled in when you click "Try it out",
             # which is easy to overlook.
-            # example=["biolink:Disease", "biolink:PhenotypicFeature"]
+            # examples=["biolink:Disease", "biolink:PhenotypicFeature"]
         )] = [],
         only_prefixes: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of prefixes to filter to, e.g. `MONDO|EFO`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="MONDO|EFO"
+            # examples="MONDO|EFO"
         )] = None,
         exclude_prefixes: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of prefixes to exclude, e.g. `UMLS|EFO`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="UMLS|EFO"
+            # examples="UMLS|EFO"
         )] = None,
         only_taxa: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of taxa to filter, "
                         "e.g. `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
-        )] = None
+            # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
+        )] = None,
+        debug: Annotated[Union[DebugOptions, None], Query(
+            description="Provide debugging information on the Solr query as described in <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameters</a>."
+        )] = 'none'
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
 
 
 @app.post("/lookup",
     summary="Look up cliques for a fragment of a name or synonym.",
-    description="Returns cliques with a name or synonym that contains a specified string.",
+    description="<p>Returns cliques with a name or synonym that contains a specified string.</p>"
+                "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>.</p>"
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
     response_model=List[LookupResult],
     tags=["lookup"]
 )
@@ -307,46 +325,50 @@ async def lookup_curies_post(
             le=1000
         )] = 10,
         biolink_type: Annotated[Union[List[str], None], Query(
-            description="The Biolink types to filter to (with or without the `biolink:` prefix), "
+            description="The <a href=\"https://biolink.github.io/biolink-model/\">Biolink Model</a> types to filter to (with or without the `biolink:` prefix), "
                         "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                         "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                         "Disease, not concepts that are both PhenotypicFeature AND Disease.",
             # We can't use `example` here because otherwise it gets filled in when you click "Try it out",
             # which is easy to overlook.
-            # example=["biolink:Disease", "biolink:PhenotypicFeature"]
+            # examples=["biolink:Disease", "biolink:PhenotypicFeature"]
         )] = [],
         only_prefixes: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of prefixes to filter to, e.g. `MONDO|EFO`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="MONDO|EFO"
+            # examples="MONDO|EFO"
         )] = None,
         exclude_prefixes: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of prefixes to exclude, e.g. `UMLS|EFO`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="UMLS|EFO"
+            # examples="UMLS|EFO"
         )] = None,
         only_taxa: Annotated[Union[str, None], Query(
             description="Pipe-separated, case-sensitive list of taxa to filter, "
                         "e.g. `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`.",
             # We can't use `example` here because otherwise it gets filled in when filling this in.
-            # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
-        )] = None
+            # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
+        )] = None,
+        debug: Annotated[Union[DebugOptions, None], Query(
+            description="Provide debugging information on the Solr query as per <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameter</a>."
+        )] = 'none'
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
 
 
 async def lookup(string: str,
            autocomplete: bool = False,
            highlighting: bool = False,
            offset: int = 0,
-           limit: conint(le=1000) = 10,
+           limit: Annotated[int, Field(strict=True, gt=0, le=1000)] = 10,
            biolink_types: List[str] = None,
            only_prefixes: str = "",
            exclude_prefixes: str = "",
-           only_taxa: str = ""
+           only_taxa: str = "",
+           debug: DebugOptions = 'none',
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
@@ -451,6 +473,12 @@ async def lookup(string: str,
             # "hl.highlightMultiTerm": "true",
         })
 
+    if debug and debug != 'none':
+        inner_params['debug'] = debug
+
+        # Rather than returning the explain as a string, return it as structured JSON.
+        inner_params['debug.explain.structured'] = 'true'
+
     params = {
         "query": {
             "edismax": {
@@ -487,6 +515,12 @@ async def lookup(string: str,
         logger.error("Solr REST error: %s", response.text)
         response.raise_for_status()
     response = response.json()
+
+    # Do we have any debug.explain information?
+    explain_info = {}
+    if 'debug' in response and 'explain' in response['debug']:
+        explain_info = response['debug']['explain']
+
     time_solr_end = time.time_ns()
     logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
 
@@ -519,6 +553,17 @@ async def lookup(string: str,
             # Solr sometimes returns duplicates or a blank string here?
             synonym_matches = list(filter(lambda s: s, set(synonym_matches)))
 
+        # Prepare debugging and explain information for this request.
+        debug_for_this_request = response.get('debug', None)
+        explain_for_this_doc = None
+        if debug in {DebugOptions.results, DebugOptions.all}:
+            if doc['id'] in explain_info:
+                explain_for_this_doc = explain_info[doc['id']]
+
+                # If we have explain information, we don't need to also include it in the debugging information.
+                debug_for_this_request['explain'] = {"_comment": "Removed to avoid data duplication"}
+
+
         outputs.append(LookupResult(curie=doc.get("curie", ""),
                            label=doc.get("preferred_name", ""),
                            highlighting={
@@ -529,11 +574,13 @@ async def lookup(string: str,
                            score=doc.get("score", ""),
                            taxa=doc.get("taxa", []),
                            clique_identifier_count=doc.get("clique_identifier_count", 0),
-                           types=[f"biolink:{d}" for d in doc.get("types", [])]))
+                           types=[f"biolink:{d}" for d in doc.get("types", [])],
+                           explain=explain_for_this_doc,
+                           debug=debug_for_this_request))
 
     time_end = time.time_ns()
     logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
-                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}) "
+                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
                  f"took {(time_end - time_start)/1_000_000:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
     )
 
@@ -572,7 +619,7 @@ class NameResQuery(BaseModel):
     )
     biolink_types: Optional[List[str]] = Field(
         [],
-        description="The Biolink types to filter to (with or without the `biolink:` prefix), "
+        description="The <a href=\"https://biolink.github.io/biolink-model/\">Biolink Model</a> types to filter to (with or without the `biolink:` prefix), "
                     "e.g. `biolink:Disease` or `Disease`. Multiple types will be combined with OR, i.e. filtering "
                     "for PhenotypicFeature and Disease will return concepts that are either PhenotypicFeatures OR "
                     "Disease, not concepts that are both PhenotypicFeature AND Disease.",
@@ -581,26 +628,32 @@ class NameResQuery(BaseModel):
         "",
         description="Pipe-separated, case-sensitive list of prefixes to filter to, e.g. `MONDO|EFO`.",
         # We can't use `example` here because otherwise it gets filled in when filling this in.
-        # example="MONDO|EFO"
+        # examples="MONDO|EFO"
     )
     exclude_prefixes: Optional[str] = Field(
         "",
         description="Pipe-separated, case-sensitive list of prefixes to exclude, e.g. `UMLS|EFO`.",
         # We can't use `example` here because otherwise it gets filled in when filling this in.
-        # example="UMLS|EFO"
+        # examples="UMLS|EFO"
     )
     only_taxa: Optional[str] = Query(
         "",
         description="Pipe-separated, case-sensitive list of taxa to filter, "
                     "e.g. `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`.",
         # We can't use `example` here because otherwise it gets filled in when filling this in.
-        # example="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
+        # examples="NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955"
+    )
+    debug: Optional[DebugOptions] = Field(
+        'none',
+        description="Provide debugging information on the Solr query as per <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameter</a>."
     )
 
 
 @app.post("/bulk-lookup",
           summary="Look up cliques for a fragment of multiple names or synonyms.",
-          description="Returns cliques for each query.",
+          description="<p>Returns cliques for each query.</p>"
+                      "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#bulk-lookup\">API documentation</a>.</p>"
+                      "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
           response_model=Dict[str, List[LookupResult]],
           tags=["lookup"]
 )
@@ -617,10 +670,10 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             query.biolink_types,
             query.only_prefixes,
             query.exclude_prefixes,
-            query.only_taxa)
+            query.only_taxa,
+            query.debug)
     time_end = time.time_ns()
-    logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}) took {(time_end - time_start)/1_000_000:.2f}ms")
-
+    logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}): took {(time_end - time_start)/1_000_000:.2f}ms")
     return result
 
 
