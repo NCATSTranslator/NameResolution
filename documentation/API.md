@@ -91,9 +91,20 @@ The Name Resolver largely consists of two [search endpoints](#search-endpoints):
 ## Conflation
 
 Unlike the Node Normalizer, the Name Resolution Service does not currently support on-the-fly conflation. Instead,
-all the [Babel conflations](https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md) are turned on
-when Solr database is built. This means that -- for example -- protein-encoding genes will include the synonyms found
+all the [Babel conflations](https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md) are turned on when Solr database is built. At the moment, this includes:
+* GeneProtein conflation: protein-encoding genes are conflated with the protein(s) they encode, and the gene identifier
+  is used to identify this concept. Therefore, if you search for ""
+* DrugChemical conflation: drugs are conflated with their active ingredient, and the identifier for the active ingredient
+  is used to identify this concept.
+This means that -- for example -- protein-encoding genes will include the synonyms found
 for the protein they encode, and that no separate entry will be available for those proteins.
+
+Once you have an identifier from Name Resolver, you can use the [Node Normalizer](https://nodenormalization-sri.renci.org/)
+to look up the equivalent identifiers for that CURIE with and without conflation. Please use the Node Normalizer
+corresponding to the instance of Name Resolver you are using.
+
+We are currently working on supporting
+[on-the-fly conflation](https://github.com/NCATSTranslator/NameResolution/issues/224) in Name Resolver.
 
 ## Search endpoints
 
