@@ -13,7 +13,9 @@ done
 echo "SOLR is up and running at ${SOLR_SERVER}."
 
 # Step 2. Create fields for search.
-source "setup_solr.sh"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/data-loading/setup_solr.sh"
+echo Solr database has been set up.
 
 # Step 3. Load specified files.
 for f in $1; do

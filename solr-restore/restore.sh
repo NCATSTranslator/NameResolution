@@ -12,7 +12,9 @@
 # This script should only require the `wget` program.
 #
 # TODO: This script does not currently implement any Blocklists.
-set -euo pipefail
+
+# We don't use set -e because the loop test relies on failures being ignored.
+set -uo pipefail
 
 # Configuration options
 SOLR_SERVER="http://localhost:8983"
@@ -44,7 +46,6 @@ wget -O - "$RESTORE_URL"
 sleep 10
 RESTORE_STATUS_URL="${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restorestatus"
 RESTORE_STATUS=$(wget -q -O - "$RESTORE_STATUS_URL" 2>&1 | grep "success") >&2
-echo "Restore status: ${RESTORE_STATUS}"
 until [ -n "$RESTORE_STATUS" ] ; do
   echo "Solr restore in progress. Note: if this takes too long please check Solr health."
   RESTORE_STATUS=$(wget -O - "$RESTORE_STATUS_URL" 2>&1 | grep "success") >&2
