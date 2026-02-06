@@ -17,8 +17,8 @@ services:
         source: ./data/solr
         target: /var/solr/data
 
-  nameres:
-    container_name: nameres
+  nameres_web:
+    container_name: nameres_web
     platform: linux/amd64
     environment:
       - SOLR_HOST=name_solr
