@@ -18,6 +18,7 @@ set -uo pipefail
 
 # Configuration options
 SOLR_SERVER="http://localhost:8983"
+SLEEP_INTERVAL=60
 
 # Please don't change these values unless you change NameRes appropriately!
 COLLECTION_NAME="name_lookup"
@@ -43,12 +44,16 @@ CORE_NAME="${COLLECTION_NAME}_shard1_replica_n1"
 echo "Starting Solr restore on core ${CORE_NAME}, with status at ${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restorestatus"
 RESTORE_URL="${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restore&location=/var/solr/data/var/solr/data/&name=${BACKUP_NAME}"
 wget -O - "$RESTORE_URL"
-sleep 10
+sleep "$SLEEP_INTERVAL"
 RESTORE_STATUS_URL="${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restorestatus"
-RESTORE_STATUS=$(wget -q -O - "$RESTORE_STATUS_URL" 2>&1 | grep "success") >&2
+RESTORE_STATUS=$(wget -q -O - "$RESTORE_STATUS_URL" 2>&1 | grep "success")
+RESTORE_STATUS=""
 until [ -n "$RESTORE_STATUS" ] ; do
-  echo "Solr restore in progress. Note: if this takes too long please check Solr health."
-  RESTORE_STATUS=$(wget -O - "$RESTORE_STATUS_URL" 2>&1 | grep "success") >&2
-  sleep 10
+  echo "Solr restore in progress. If this takes longer than 30 minutes, please visit ${SOLR_SERVER} with your browser to check Solr."
+  RESTORE_STATUS=$(wget -q -O - "$RESTORE_STATUS_URL" 2>&1 | grep "success")
+  sleep "$SLEEP_INTERVAL"
 done
-echo "Solr restore complete"
+echo "Solr restore complete!"
+
+echo "Solr contents:"
+curl -s --negotiate -u: "$SOLR_SERVER/solr/name_lookup/query?q=*:*&rows=0"

@@ -24,7 +24,7 @@ for f in $1; do
 	# curl -X POST -T $f will stream it. See https://github.com/TranslatorSRI/NameResolution/issues/194
 	curl -H 'Content-Type: application/json' -X POST -T $f \
 	    "$SOLR_SERVER/solr/name_lookup/update/json/docs?processor=uuid&uuid.fieldName=id&commit=true"
-	sleep 30
+	sleep 60
 done
 echo "Check solr"
 curl -s --negotiate -u: "$SOLR_SERVER/solr/name_lookup/query?q=*:*&rows=0"
