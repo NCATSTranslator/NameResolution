@@ -34,24 +34,23 @@ instance or from Translator.
 6. Start the Solr and NameRes pods by running `docker-compose up`. By default, Docker Compose
    will download and start the relevant pods and show you logs from both sources. You may
    press `Ctrl+C` to stop the pods.
-7. Wait for the Solr pod to start up. Once it's ready, you will need to run the Solr restore
-   script by running `bash data-loading/setup-and-load-solr.sh`. This will set up the types
-   and indexes used by NameRes.
-8. Trigger the Solr restore by running the restore script using `bash`, i.e. `bash solr-restore/restore.sh`. This script
-   assumes that the Solr pod is available on `localhost:8983` and contains a
-   `var/solr/data/snapshot.backup` directory with the data to restore.
-9. Look for the script to end properly (`Solr restore complete!`). Look up http://localhost:2433/status
+7. Trigger the Solr restore by running the restore script using `bash`, i.e.
+   `bash solr-restore/restore.sh`. This script assumes that the Solr pod is available on `localhost:8983`
+   and contains a `var/solr/data/snapshot.backup` directory with the data to restore. It will set up
+   some data types needed by NameRes and then triggering a restore of a backup. It will then go into a
+   sleep loop until the restore is complete, which should take 15-20 minutes.
+8. Check that the script ended properly (`Solr restore complete!`). Look up http://localhost:2433/status
    to ensure that the database has been loaded as expected. You can now delete the uncompressed database
    backup in `$SOLR_DATA/var` to save disk space.
-10. With the default settings, NameRes should be running on localhost on port 2433 (i.e. http://localhost:2433/).
-    You should see a message in the NameRes pod log saying something like
-    `Uvicorn running on http://0.0.0.0:2433 (Press CTRL+C to quit)` to confirm this.
-    * By default, the web frontend (http://0.0.0.0:2433/docs) defaults to using the
-      [NameRes RENCI Dev](https://name-resolution-sri.renci.org/docs) — you will need to
-      change the "Servers" setting to use your local NameRes instance.
-    * If you try this before the restore has finished, looking up http://0.0.0.0:2433/status will give you an error
-      (`Expected core not found.`). This is because the Solr database and indexes have not yet been loaded.
-      Once this is finished, the NameRes instance should be ready to use.
+9. With the default settings, NameRes should be running on localhost on port 2433 (i.e. http://localhost:2433/).
+   You should see a message in the NameRes pod log saying something like
+   `Uvicorn running on http://0.0.0.0:2433 (Press CTRL+C to quit)` to confirm this.
+   * By default, the web frontend (http://0.0.0.0:2433/docs) defaults to using the
+     [NameRes RENCI Dev](https://name-resolution-sri.renci.org/docs) — you will need to
+     change the "Servers" setting to use your local NameRes instance.
+   * If you try this before the restore has finished, looking up http://0.0.0.0:2433/status will give you an error
+     (`Expected core not found.`). This is because the Solr database and indexes have not yet been loaded.
+     Once this is finished, the NameRes instance should be ready to use.
 
 #### Loading from synonyms files
 
