@@ -1,6 +1,6 @@
 services:
   solr:
-    container_name: name_solr
+    container_name: nameres_solr
     image: solr:9.1
     environment:
       # Change this setting to control how much memory you would like your Solr setup to have.
@@ -21,7 +21,7 @@ services:
     container_name: nameres_web
     platform: linux/amd64
     environment:
-      - SOLR_HOST=name_solr
+      - SOLR_HOST=nameres_solr
       - BABEL_VERSION=          # e.g. 2025mar31
       - BABEL_VERSION_URL=      # The URL of the Babel version URL
       - LOCATION_VALUE=localhost
