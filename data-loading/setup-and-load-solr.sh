@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# We don't use set -e because the loop test relies on failures being ignored.
+set -uo pipefail
+
+# Configuration options
 SOLR_SERVER="http://localhost:8983"
 
 # Step 1. Make sure the Solr service is up and running.
@@ -14,7 +18,7 @@ echo "SOLR is up and running at ${SOLR_SERVER}."
 
 # Step 2. Create fields for search.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/data-loading/setup_solr.sh"
+source "$SCRIPT_DIR/setup_solr.sh"
 echo Solr database has been set up.
 
 # Step 3. Load specified files.
