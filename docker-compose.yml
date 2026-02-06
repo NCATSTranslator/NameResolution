@@ -19,11 +19,12 @@ services:
 
   nameres:
     container_name: nameres
+    platform: linux/amd64
     environment:
       - SOLR_HOST=name_solr
       - BABEL_VERSION=          # e.g. 2025mar31
       - BABEL_VERSION_URL=      # The URL of the Babel version URL
-      - LOCATION_VALUE=RENCI
+      - LOCATION_VALUE=localhost
       - MATURITY_VALUE=development
     ports:
       - '2433:2433'

@@ -31,7 +31,7 @@ instance or from Translator.
     * By default, the Docker Compose file will use the latest released version of NameRes
       as the frontend. To use the source code in this repository, you will need to change
       the build instructions for the `nameres` service in the Docker Compose file.
-6. Start the Solr and NameRes pods by running `docker-compose up`. By default, Docker Compose
+6. Start the Solr and NameRes pods by running `docker compose up`. By default, Docker Compose
    will download and start the relevant pods and show you logs from both sources. You may
    press `Ctrl+C` to stop the pods.
 7. Trigger the Solr restore by running the restore script using `bash`, i.e.
