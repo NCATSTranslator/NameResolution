@@ -12,7 +12,7 @@
 # This script should only require the `wget` program.
 #
 # TODO: This script does not currently implement any Blocklists.
-set -xa
+set -euo pipefail
 
 # Configuration options
 SOLR_SERVER="http://localhost:8983"
@@ -31,11 +31,12 @@ until [ "$response" = "200" ]; do
 done
 echo "SOLR is up and running at ${SOLR_SERVER}."
 
-# Step 3. Create fields for search.
-source "../data-loading/setup_solr.sh"
+# Step 2. Create fields for search.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../data-loading/setup_solr.sh"
 
-# Step 4. Restore the data
-CORE_NAME=${COLLECTION_NAME}_shard1_replica_n1
+# Step 3. Restore the data
+CORE_NAME="${COLLECTION_NAME}_shard1_replica_n1"
 RESTORE_URL="${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restore&location=/var/solr/data/var/solr/data/&name=${BACKUP_NAME}"
 wget -O - "$RESTORE_URL"
 sleep 10
