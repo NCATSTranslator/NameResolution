@@ -34,17 +34,20 @@ echo "SOLR is up and running at ${SOLR_SERVER}."
 # Step 2. Create fields for search.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../data-loading/setup_solr.sh"
+echo Solr database has been set up.
 
 # Step 3. Restore the data
 CORE_NAME="${COLLECTION_NAME}_shard1_replica_n1"
+echo "Starting Solr restore on core ${CORE_NAME}, with status at ${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restorestatus"
 RESTORE_URL="${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restore&location=/var/solr/data/var/solr/data/&name=${BACKUP_NAME}"
 wget -O - "$RESTORE_URL"
 sleep 10
-RESTORE_STATUS=$(wget -q -O - ${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restorestatus 2>&1 | grep "success") >&2
+RESTORE_STATUS_URL="${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restorestatus"
+RESTORE_STATUS=$(wget -q -O - "$RESTORE_STATUS_URL" 2>&1 | grep "success") >&2
 echo "Restore status: ${RESTORE_STATUS}"
-until [ ! -z "$RESTORE_STATUS" ] ; do
-  echo "Solr restore in progress. Note: if this takes too long please check solr health."
-  RESTORE_STATUS=$(wget -O - ${SOLR_SERVER}/solr/${CORE_NAME}/replication?command=restorestatus 2>&1 | grep "success") >&2
+until [ -n "$RESTORE_STATUS" ] ; do
+  echo "Solr restore in progress. Note: if this takes too long please check Solr health."
+  RESTORE_STATUS=$(wget -O - "$RESTORE_STATUS_URL" 2>&1 | grep "success") >&2
   sleep 10
 done
 echo "Solr restore complete"
