@@ -31,6 +31,10 @@ instance or from Translator.
     * By default, the Docker Compose file will use the latest released version of NameRes
       as the frontend. To use the source code in this repository, you will need to change
       the build instructions for the `nameres` service in the Docker Compose file.
+    * By default, Solr will be given 16G of memory, which seems sufficient for testing.
+      If you want to run many Solr queries, you might want to increase this. To do this,
+      you will need to change BOTH the `mem_limit` setting in the `nameres_solr` service in 
+      `docker-compose.yml` and the `SOLR_JAVA_MEM` setting.
 6. Start the Solr and NameRes pods by running `docker compose up`. By default, Docker Compose
    will download and start the relevant pods and show you logs from both sources. You may
    press `Ctrl+C` to stop the pods.

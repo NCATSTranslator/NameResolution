@@ -1,11 +1,12 @@
 services:
-  solr:
+  nameres_solr:
     container_name: nameres_solr
     image: solr:9.1
+    mem_limit: 18G
     environment:
       # Change this setting to control how much memory you would like your Solr setup to have.
       # Note that your Docker will need to be configured to allow this amount of memory.
-      SOLR_JAVA_MEM: '-Xms25G -Xmx25G'
+      SOLR_JAVA_MEM: '-Xmx16G'
     ports:
       - '8983:8983'
     command: ['-DzkRun']
