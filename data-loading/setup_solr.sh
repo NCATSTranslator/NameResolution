@@ -13,7 +13,7 @@
 # require SOLR_SERVER
 : "${SOLR_SERVER:?SOLR_SERVER must be set}"
 
-echo "We are here with SOLR_SERVER='$SOLR_SERVER'"
+echo "Setting up Solr database with SOLR_SERVER='$SOLR_SERVER'"
 
 # add collection
 curl -X POST "$SOLR_SERVER/solr/admin/collections?action=CREATE&name=name_lookup&numShards=1&replicationFactor=1"
