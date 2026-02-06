@@ -1,11 +1,12 @@
 services:
-  solr:
-    container_name: name_solr
+  nameres_solr:
+    container_name: nameres_solr
     image: solr:9.1
+    mem_limit: 18G
     environment:
       # Change this setting to control how much memory you would like your Solr setup to have.
       # Note that your Docker will need to be configured to allow this amount of memory.
-      SOLR_JAVA_MEM: '-Xms25G -Xmx25G'
+      SOLR_JAVA_MEM: '-Xmx16G'
     ports:
       - '8983:8983'
     command: ['-DzkRun']
@@ -17,13 +18,14 @@ services:
         source: ./data/solr
         target: /var/solr/data
 
-  nameres:
-    container_name: nameres
+  nameres_web:
+    container_name: nameres_web
+    platform: linux/amd64
     environment:
-      - SOLR_HOST=name_solr
+      - SOLR_HOST=nameres_solr
       - BABEL_VERSION=          # e.g. 2025mar31
       - BABEL_VERSION_URL=      # The URL of the Babel version URL
-      - LOCATION_VALUE=RENCI
+      - LOCATION_VALUE=localhost
       - MATURITY_VALUE=development
     ports:
       - '2433:2433'
