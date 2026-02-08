@@ -391,7 +391,7 @@ async def lookup(string: str,
     #   - https://pypi.org/project/charset-normalizer/
     #   - https://www.crummy.com/software/BeautifulSoup/bs4/doc/#unicode-dammit
     # But the only issue we've actually run into so far has been the Windows smart
-    # quote (https://github.com/TranslatorSRI/NameResolution/issues/176), so for now
+    # quote (https://github.com/NCATSTranslator/NameResolution/issues/176), so for now
     # let's detect and replace just those characters.
     string_lc = re.sub(r"[“”]", '"', re.sub(r"[‘’]", "'", string_lc))
 

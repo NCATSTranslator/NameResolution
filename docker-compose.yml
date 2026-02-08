@@ -30,6 +30,6 @@ services:
 
     # This will use the latest version of NameRes -- if you'd prefer to build an image using the Dockerfile
     # in the current directory, remove the `:latest` tag and uncomment the `build:` section that follows it.
-    image: ghcr.io/translatorsri/nameresolution:latest
+    image: ghcr.io/ncatstranslator/nameresolution:latest
     # build:
     #  context: .

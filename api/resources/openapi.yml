@@ -11,7 +11,7 @@ info:
     along with many other options. Given a preferred CURIE, the known synonyms of that CURIE can also be retrieved.<p/>
     Multiple results may be returned representing possible conceptual matches, but all of the identifiers
     have been correctly normalized using the
-    <a href="https://github.com/TranslatorSRI/NodeNormalization">Node Normalization</a> service.<p/>You can read more
+    <a href="https://github.com/NCATSTranslator/NodeNormalization">Node Normalization</a> service.<p/>You can read more
     about this API on the <a href="https://github.com/NCATSTranslator/NameResolution">NameResolution GitHub repository</a>.<p/>
     Note that the returned by this service have been conflated using both GeneProtein and DrugChemical conflation;
     you can read more about this at the <a href="https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md">Conflation documentation</a>.'
