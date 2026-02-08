@@ -1,5 +1,7 @@
 # Name Resolver
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18488923.svg)](https://doi.org/10.5281/zenodo.18488923) [![arXiv](https://img.shields.io/badge/arXiv-2601.10008-b31b1b.svg)](https://arxiv.org/abs/2601.10008)
+
 Name Resolver (Name Lookup or NameRes) takes lexical strings and attempts to map them to identifiers (CURIEs) from a vocabulary or ontology. An optional autocomplete mode (which assumes the query is incomplete) is available,
 along with many other options. Given a preferred CURIE, the known synonyms of that CURIE can also be retrieved.
 Multiple results may be returned representing possible conceptual matches, but all of the identifiers have been correctly normalized using the [Node Normalization](https://github.com/NCATSTranslator/NodeNormalization) service.
