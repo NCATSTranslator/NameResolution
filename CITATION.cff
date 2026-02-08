@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Vaidya"
+    given-names: "Gaurav"
+  - family-names: "Bizon"
+    given-names: "Chris"
+  - family-names: "Wang"
+    given-names: "Patrick"
+  - family-names: "Owen"
+    given-names: "Phil"
+  - family-names: "Shefchek"
+    given-names: "Kent"
+title: "Name Resolution"
+version: 1.6.1
+date-released: 2026-02-04
+url: "https://github.com/TranslatorSRI/NameResolution"
+repository-code: "https://github.com/TranslatorSRI/NameResolution"
+abstract: >-
+  Name Resolution (Name Lookup or NameRes) takes lexical strings and attempts to map them to identifiers (CURIEs) from a vocabulary or ontology.
