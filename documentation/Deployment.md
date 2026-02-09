@@ -21,7 +21,7 @@ instance or from Translator.
    storage of approx 400G: 104G of the downloaded file (which can be deleted once decompressed),
    147G of uncompressed backup (both of which can be deleted once restored) and 147G of
    Apache Solr databases.
-3. Download the Solr backup URL you want to use into your Solr data directory. It should be
+3. Download the Solr backup URL you want to use and save it in `./data/solr`. It should be
    approximately 104G in size.
 4. Uncompress the Solr backup file. It should produce a `var/solr/data/snapshot.backup` directory
    in the Solr data (by default, `./data/solr/var/solr/data/snapshot.backup`). You can delete
