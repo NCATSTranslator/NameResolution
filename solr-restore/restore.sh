@@ -24,6 +24,11 @@ SLEEP_INTERVAL=60
 COLLECTION_NAME="name_lookup"
 BACKUP_NAME="backup"
 
+# Step 0. Make sure the Solr data directory looks like it contains the uncompressed backup.
+if [ ! -d "./data/solr/var" ]; then
+  echo 'WARNING: No ./data/solr/var directory found; are you sure you uncompressed the NameRes backup into the Solr data directory?' >&2
+fi
+
 # Step 1. Make sure the Solr service is up and running.
 HEALTH_ENDPOINT="${SOLR_SERVER}/solr/admin/cores?action=STATUS"
 response=$(wget --spider --server-response ${HEALTH_ENDPOINT} 2>&1 | grep "HTTP/" | awk '{ print $2 }') >&2
