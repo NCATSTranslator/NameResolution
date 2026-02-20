@@ -74,6 +74,11 @@ async def status() -> Dict:
     babel_version = os.environ.get("BABEL_VERSION", "unknown")
     babel_version_url = os.environ.get("BABEL_VERSION_URL", "")
 
+    # Figure out the NameRes version.
+    nameres_version = "unknown"
+    if 'version' in get_app_info():
+        nameres_version = 'v' + get_app_info()['version']
+
     # We should have a status for name_lookup_shard1_replica_n1.
     if 'status' in result and 'name_lookup_shard1_replica_n1' in result['status']:
         core = result['status']['name_lookup_shard1_replica_n1']
@@ -87,6 +92,7 @@ async def status() -> Dict:
             'message': 'Reporting results from primary core.',
             'babel_version': babel_version,
             'babel_version_url': babel_version_url,
+            'nameres_version': nameres_version,
             'startTime': core['startTime'],
             'numDocs': index.get('numDocs', ''),
             'maxDoc': index.get('maxDoc', ''),
@@ -99,7 +105,8 @@ async def status() -> Dict:
     else:
         return {
             'status': 'error',
-            'message': 'Expected core not found.'
+            'message': 'Expected core not found.',
+            'nameres_version': nameres_version,
         }
 
 
