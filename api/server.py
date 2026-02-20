@@ -114,6 +114,13 @@ async def status() -> Dict:
         return {
             'status': 'error',
             'message': 'Expected core not found.',
+            'babel_version': babel_version,
+            'babel_version_url': babel_version_url,
+            'biolink_model': {
+                'tag': biolink_model_tag,
+                'url': biolink_model_url,
+                'download_url': biolink_model_download_url,
+            },
             'nameres_version': nameres_version,
         }
 
