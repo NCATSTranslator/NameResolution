@@ -24,6 +24,6 @@ def test_status():
 
     # Count the specific number of test documents we load.
     assert status['numDocs'] == 89
-    assert status['maxDocs'] == 89
+    assert status['maxDoc'] == 89
     assert status['deletedDocs'] == 0
 
