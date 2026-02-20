@@ -317,6 +317,12 @@ version and changelog URL, which can be used to determine which version of Babel
   "message": "Reporting results from primary core.",
   "babel_version": "2025sep1",
   "babel_version_url": "https://github.com/ncatstranslator/Babel/blob/master/releases/2025sep1.md",
+  "biolink_model": {
+    "tag": "v4.2.6-rc5",
+    "url": "https://github.com/biolink/biolink-model/tree/v4.2.6-rc5",
+    "download_url": "https://raw.githubusercontent.com/biolink/biolink-model/v4.2.6-rc5/biolink-model.yaml"
+  },
+  "nameres_version": "v1.5.1",
   "startTime": "2025-12-19T11:53:09.638Z",
   "numDocs": 425583391,
   "maxDoc": 425586610,
