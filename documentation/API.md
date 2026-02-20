@@ -310,6 +310,9 @@ POST /synonyms with body:
 
 Returns the status of the service. Most importantly, this returns the [Babel](https://github.com/NCATSTranslator/Babel)
 version and changelog URL, which can be used to determine which version of Babel is currently loaded in this service.
+It also includes the NameRes version (also visible in the OpenAPI documentation)
+and the Biolink Model version used to build the Solr database, as well as bunch of information from the underlying
+Solr database.
 
 ```json
 {
