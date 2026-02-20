@@ -71,10 +71,16 @@ async def status() -> Dict:
     babel_version = os.environ.get("BABEL_VERSION", "unknown")
     babel_version_url = os.environ.get("BABEL_VERSION_URL", "")
 
+    # Look up the BIOLINK_MODEL_TAG.
+    biolink_model_tag = os.environ.get("BIOLINK_MODEL_TAG", "master") # Note that this should be a tag from the Biolink Model repo, e.g. "master" or "v4.3.6".
+    biolink_model_url = f"https://github.com/biolink/biolink-model/tree/{biolink_model_tag}"
+    biolink_model_download_url = f"https://raw.githubusercontent.com/biolink/biolink-model/{biolink_model_tag}/biolink-model.yaml"
+
     # Figure out the NameRes version.
-    nameres_version = "unknown"
-    if 'version' in get_app_info():
-        nameres_version = 'v' + get_app_info()['version']
+    nameres_version = "master"
+    app_info = get_app_info()
+    if 'version' in app_info and app_info['version']:
+        nameres_version = 'v' + app_info['version']
 
     # We should have a status for name_lookup_shard1_replica_n1.
     if 'status' in result and 'name_lookup_shard1_replica_n1' in result['status']:
@@ -89,6 +95,11 @@ async def status() -> Dict:
             'message': 'Reporting results from primary core.',
             'babel_version': babel_version,
             'babel_version_url': babel_version_url,
+            'biolink_model': {
+                'tag': biolink_model_tag,
+                'url': biolink_model_url,
+                'download_url': biolink_model_download_url,
+            },
             'nameres_version': nameres_version,
             'startTime': core['startTime'],
             'numDocs': index.get('numDocs', ''),
