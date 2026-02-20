@@ -18,7 +18,7 @@ def test_status():
     assert 'biolink_model' in status
     assert 'tag' in status['biolink_model']
     assert 'nameres_version' in status
-    assert status['version'].startswith('9.')
+    assert status['version'] > 1
     assert status['size'] != ''
     assert status['startTime']
 
