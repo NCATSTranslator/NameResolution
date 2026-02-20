@@ -18,10 +18,12 @@ def test_status():
     assert 'biolink_model' in status
     assert 'tag' in status['biolink_model']
     assert 'nameres_version' in status
-
-    assert status['startTime']
-    assert status['numDocs'] == 32
-    assert status['maxDocs'] == 32
-    assert status['deletedDocs'] == 0
     assert status['version'].startswith('9.')
     assert status['size'] != ''
+    assert status['startTime']
+
+    # Count the specific number of test documents we load.
+    assert status['numDocs'] == 89
+    assert status['maxDocs'] == 89
+    assert status['deletedDocs'] == 0
+
