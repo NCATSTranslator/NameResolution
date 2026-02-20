@@ -72,7 +72,8 @@ async def status() -> Dict:
     babel_version_url = os.environ.get("BABEL_VERSION_URL", "")
 
     # Look up the BIOLINK_MODEL_TAG.
-    biolink_model_tag = os.environ.get("BIOLINK_MODEL_TAG", "master") # Note that this should be a tag from the Biolink Model repo, e.g. "master" or "v4.3.6".
+    # Note: this should be a tag from the Biolink Model repo, e.g. "master" or "v4.3.6".
+    biolink_model_tag = os.environ.get("BIOLINK_MODEL_TAG", "master")
     biolink_model_url = f"https://github.com/biolink/biolink-model/tree/{biolink_model_tag}"
     biolink_model_download_url = f"https://raw.githubusercontent.com/biolink/biolink-model/{biolink_model_tag}/biolink-model.yaml"
 
