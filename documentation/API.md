@@ -310,6 +310,9 @@ POST /synonyms with body:
 
 Returns the status of the service. Most importantly, this returns the [Babel](https://github.com/NCATSTranslator/Babel)
 version and changelog URL, which can be used to determine which version of Babel is currently loaded in this service.
+It also includes the NameRes version (also visible in the OpenAPI documentation)
+and the Biolink Model version used to build the Solr database, as well as bunch of information from the underlying
+Solr database.
 
 ```json
 {
@@ -317,6 +320,12 @@ version and changelog URL, which can be used to determine which version of Babel
   "message": "Reporting results from primary core.",
   "babel_version": "2025sep1",
   "babel_version_url": "https://github.com/ncatstranslator/Babel/blob/master/releases/2025sep1.md",
+  "biolink_model": {
+    "tag": "v4.2.6-rc5",
+    "url": "https://github.com/biolink/biolink-model/tree/v4.2.6-rc5",
+    "download_url": "https://raw.githubusercontent.com/biolink/biolink-model/v4.2.6-rc5/biolink-model.yaml"
+  },
+  "nameres_version": "v1.5.1",
   "startTime": "2025-12-19T11:53:09.638Z",
   "numDocs": 425583391,
   "maxDoc": 425586610,
