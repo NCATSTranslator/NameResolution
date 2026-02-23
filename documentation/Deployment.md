@@ -17,15 +17,18 @@ instance or from Translator.
    with [Docker Compose](https://docs.docker.com/compose/install/).
 2. Create the local directory where your Solr data will be stored -- by default, this is
    `./data/solr` in this directory, but you can change this in
-   [docker-compose.yml](./docker-compose.yml). This directory will need to have a maximum
-   storage of approx 400G: 104G of the downloaded file (which can be deleted once decompressed),
-   147G of uncompressed backup (both of which can be deleted once restored) and 147G of
-   Apache Solr databases.
+   [docker-compose.yml](./docker-compose.yml). This directory will need approximately 250G
+   of storage: ~100G for the downloaded backup file (which can be deleted once extracted)
+   and ~150G for the extracted Solr core directory.
 3. Download the Solr backup URL you want to use and save it in `./data/solr`. It should be
-   approximately 104G in size.
-4. Uncompress the Solr backup file. It should produce a `var/solr/data/snapshot.backup` directory
-   in the Solr data (by default, `./data/solr/var/solr/data/snapshot.backup`). You can delete
-   the downloaded file (`snapshot.backup.tar.gz`) once it has been decompressed.
+   approximately 100G in size.
+4. Extract the Solr backup into `./data/solr`:
+   ```
+   cd ./data/solr && tar zxvf solr-data.tar.gz
+   ```
+   This produces a `name_lookup/` directory (the complete Solr core, including schema and
+   index data). You can delete the downloaded file (`solr-data.tar.gz`) once it has been
+   extracted.
 5. Check the [docker-compose.yml](./docker-compose.yml) file to ensure that it is
    as you expect.
     * The Docker Compose file will use the latest released version of NameRes
@@ -33,34 +36,25 @@ instance or from Translator.
       the build instructions for the `nameres` service in the Docker Compose file.
     * Solr will be given 16G of memory, which seems sufficient for testing.
       If you want to run many Solr queries, you might want to increase this. To do this,
-      you will need to change BOTH the `mem_limit` setting in the `nameres_solr` service in 
+      you will need to change BOTH the `mem_limit` setting in the `nameres_solr` service in
       `docker-compose.yml` and the `SOLR_JAVA_MEM` setting.
-    * The `docker-compose.yml` file also mounts the local `data/` directory into the Solr
-      container as `/var/solr`. This will allow you to start a new NameRes from the same
+    * The `docker-compose.yml` file also mounts the local `data/solr` directory into the Solr
+      container as `/var/solr/data`. This will allow you to start a new NameRes from the same
       directory in the future. If you want to use a different directory, please change
       the `volumes` setting in the `nameres_solr` service in `docker-compose.yml`. Removing
       the binding will cause the Solr data to be stored in the Docker instance, and the
       data will be lost when the container is stopped.
 6. Start the Solr and NameRes pods by running `docker compose up`. By default, Docker Compose
-   will download and start the relevant pods and show you logs from both sources. You may
-   press `Ctrl+C` to stop the pods.
-7. Trigger the Solr restore by running the restore script using `bash`, i.e.
-   `bash solr-restore/restore.sh`. This script assumes that the Solr pod is available on `localhost:8983`
-   and contains a `var/solr/data/snapshot.backup` directory with the data to restore. It will set up
-   some data types needed by NameRes and then triggering a restore of a backup. It will then go into a
-   sleep loop until the restore is complete, which should take 15-20 minutes.
-8. Check that the script ended properly (`Solr restore complete!`). Look up http://localhost:2433/status
-   to ensure that the database has been loaded as expected. You can now delete the uncompressed database
-   backup in `$SOLR_DATA/var` to save disk space.
-9. With the default settings, NameRes should be running on localhost on port 2433 (i.e. http://localhost:2433/).
+   will download and start the relevant pods and show you logs from both sources. Solr will
+   find the extracted `name_lookup/` core and be ready immediately — no separate restore step
+   is required. You may press `Ctrl+C` to stop the pods.
+7. With the default settings, NameRes should be running on localhost on port 2433 (i.e. http://localhost:2433/).
+   Look up http://localhost:2433/status to confirm that the database has been loaded as expected.
    You should see a message in the NameRes pod log saying something like
    `Uvicorn running on http://0.0.0.0:2433 (Press CTRL+C to quit)` to confirm this.
    * By default, the web frontend (http://0.0.0.0:2433/docs) defaults to using the
      [NameRes RENCI Dev](https://name-resolution-sri.renci.org/docs) — you will need to
      change the "Servers" setting to use your local NameRes instance.
-   * If you try this before the restore has finished, looking up http://0.0.0.0:2433/status will give you an error
-     (`Expected core not found.`). This is because the Solr database and indexes have not yet been loaded.
-     Once this is finished, the NameRes instance should be ready to use.
 
 #### Loading from synonyms files
 

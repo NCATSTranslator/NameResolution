@@ -7,31 +7,29 @@ Solr, a Solr backup created, and then compressed with a particular directory str
 ## Using the Makefile
 
 This directory includes a Makefile that can be used to run most of these steps
-automatically. This is a seven-step process:
+automatically. This is a five-step process:
 
 1. Edit the Makefile to choose the directory containing Babel synonym files. Note that
-   all files in that directory will be used, and any files named `.txt.gz` will uncompressed.
+   all files in that directory will be used, and any files named `.txt.gz` will be uncompressed.
 2. Run `make all` to download the synonym data, uncompress Gzipped files, split the larger files
    and delete the split files to avoid duplicate loading. `make all` will also start the Solr server --
    you can check this by looking for a PID file Solr in `data/solr.pid`.
 3. (Optional) Access the Solr server and confirm that all the data has been loaded.
-4. Run `make start-solr-backup` to start the Solr backup.
-5. Run `make check-solr-backup` to check on the Solr backup. Look for `"status":"success"` to confirm that the
-   backup has completed.
-6. Run `make data/backup.done` to move the backup into the `data/` directory, place it in the correct directory
-   structure for NameRes, and create a `snapshot.backup.tar.gz` file.
-7. Copy the `snapshot.backup.tar.gz` file to a web server so that it can be loaded from NameRes.
+4. Run `make data/backup.done` to stop Solr, install the read-only Solr config, and create
+   `data/solr-data.tar.gz` containing the complete `name_lookup/` core directory.
+5. Copy `data/solr-data.tar.gz` to a web server so that it can be loaded from NameRes.
 
 ## Step-by-step instructions
 
 1. Set up a Solr server locally. The easiest way to do this is via Docker:
 
    ```shell
-   $ docker run -v "$PWD/data/solrdata:/var/solr" --name name_lookup -p 8983:8983 -t solr -cloud -p 8983 -m 12G
+   $ docker run -v "$PWD/data/solrdata:/var/solr/data" --name name_lookup -p 8983:8983 -t solr -p 8983 -m 12G
    ```
-   
+
    You can adjust the `12G` to increase the amount of memory available to Solr. You can also add `-d` to the
-   Docker arguments if you would like to run this node in the background.
+   Docker arguments if you would like to run this node in the background. Note: Solr runs in standalone mode
+   (no `-cloud` flag), so the data directory is `/var/solr/data/` and cores are stored directly under it.
 
 2. Copy the synonym files into the `data/synonyms` directory. Synonym files that are too large will
    need to split it into smaller files. (`gsplit` is the GNU version of `split`, which includes support
@@ -42,7 +40,7 @@ automatically. This is a seven-step process:
    $ gsplit -l 5000000 -d --additional-suffix .txt MolecularMixture.txt MolecularMixture
    ```
 
-3. Download all the synonym text files into the `data/json` folder. You can download this by running `make`.
+3. Download all the synonym text files into the `data/synonyms` folder. You can download this by running `make`.
 
    ```shell
    $ pip install -r requirements.txt
@@ -52,54 +50,30 @@ automatically. This is a seven-step process:
 4. Load the JSON files into the Solr database by running:
 
    ```shell
-   $ ./setup-and-load-solr.sh "data/json/*.json"
+   $ ./setup-and-load-solr.sh "data/synonyms/*.txt*"
    ```
-   
+
    Note the double-quotes: setup-and-load-solr.sh requires a glob pattern as its first argument, not a list of files to process!
 
-5. Generate a backup of the Solr instance. The first command will create a directory at
-   `solrdata/data/name_lookup_shard1_repical_n1/data/snapshot.backup` -- you can track its progress by comparing the
-   number of files in that directory to the number of files in `../data/index` (as I write this, it has 513 files).
-
-   ```shell
-   $ curl 'http://localhost:8983/solr/name_lookup/replication?command=backup&name=backup'
-   $ curl 'http://localhost:8983/solr/name_lookup/replication?command=details'
-   ```
-   
-   Once the backup is complete, you'll see a part of the `details` response that looks like this:
-
-   ```json
-   "backup":{
-      "startTime":"2022-09-13T18:42:43.678219123Z",
-      "fileCount":512,
-      "indexFileCount":512,
-      "status":"success",
-      "snapshotCompletedAt":"2022-09-13T19:36:00.599797304Z",
-      "endTime":"2022-09-13T19:36:00.599797304Z",
-      "snapshotName":"backup",
-      "directoryName":"snapshot.backup"
-   }
-   ```
-
-6. Shutdown the Solr instance.
+5. Stop Solr and generate the backup tarball. This stops Solr cleanly, installs the
+   read-only Solr config, and tars the complete `name_lookup/` core directory (including schema
+   and index data, excluding the write-ahead log):
 
    ```shell
    $ docker exec name_lookup solr stop -p 8983 -verbose
-   ```
-   
-7. Generate the backup tarball. At the moment, this is expected to be in the format
-   `var/solr/data/snapshot.backup/[index files]`. The easiest way to generate this tarball correctly is to run:
-
-   ```shell
-   $ mkdir -p data/var/solr/data
-   $ mv /var/solr/name_lookup_shard1_replica_n1/data/snapshot.backup data/var/solr/data
-   $ cd data
-   $ tar zcvf snapshot.backup.tar.gz var
+   $ cd data/solrdata
+   $ tar zcvf ../solr-data.tar.gz --exclude='name_lookup/data/tlog' name_lookup
    ```
 
-8. Publish `snapshot.backup.tar.gz` to a publicly-accessible URL.
+   The tarball contains `name_lookup/` with `conf/` (schema + config) and `data/index/`
+   (Lucene index). It is fully self-contained: extract it and Solr is ready to serve queries
+   with no restore step.
 
-9. Use the instructions at https://github.com/helxplatform/translator-devops/tree/develop/helm/name-lookup to set up an
-   instance of NameRes that downloads snapshot.backup.tar.gz from this publicly-accessible URL.
+6. Publish `solr-data.tar.gz` to a publicly-accessible URL.
 
-The Makefile included in this directory contains targets for more of these steps.
+7. Use the instructions at https://github.com/helxplatform/translator-devops/tree/develop/helm/name-lookup to set up an
+   instance of NameRes that downloads `solr-data.tar.gz` from this publicly-accessible URL.
+   Note that the Helm chart restore step is no longer required — the tarball is extracted
+   directly to the Solr data volume and Solr starts ready to serve queries.
+
+The Makefile included in this directory contains targets for most of these steps.
