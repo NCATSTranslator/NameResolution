@@ -1,4 +1,5 @@
 cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
 type: software
 authors:
   - family-names: "Bizon"
@@ -22,7 +23,7 @@ authors:
   - family-names: "Kebede"
     given-names: "Yaphet"
     affiliation: Renaissance Computing Institute, University of North Carolina
-    orcid: "https://orcid.org/0000-0002-50460246"
+    orcid: "https://orcid.org/0000-0002-5046-0246"
 title: "Name Resolver"
 url: "https://github.com/NCATSTranslator/NameResolution"
 repository-code: "https://github.com/NCATSTranslator/NameResolution"
