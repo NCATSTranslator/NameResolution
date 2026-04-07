@@ -77,7 +77,9 @@ async def status(include_metrics: bool = False) -> Dict:
         # A single call with group=core&group=jvm retrieves both in one round-trip.
         # Only performed when the caller passes ?metrics=true, as it adds latency.
         SOLR_CORE_NAME = 'name_lookup_shard1_replica_n1'
-        solr_metrics = None
+        solr_metrics = {
+            "message": "Use /status?metrics=true to retrieve these metrics."
+        }
         if include_metrics:
             try:
                 metrics_resp = await client.get(metrics_url, params=[
@@ -173,7 +175,7 @@ async def status(include_metrics: bool = False) -> Dict:
                 'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
                 'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
             },
-            **(({'solr_metrics': solr_metrics}) if include_metrics else {}),
+            solr_metrics: solr_metrics,
         }
     else:
         return {
@@ -187,6 +189,7 @@ async def status(include_metrics: bool = False) -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
+            solr_metrics: solr_metrics,
         }
 
 
