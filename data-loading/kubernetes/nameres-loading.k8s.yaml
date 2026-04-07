@@ -1,4 +1,4 @@
-# Kubernetes file for Nameres-loading 
+# Kubernetes file for Nameres-loading
 
 apiVersion: v1
 kind: Pod
@@ -10,7 +10,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: nameres-loading
-    image: ghcr.io/translatorsri/nameresolution-data-loading:latest
+    image: ghcr.io/ncatstranslator/nameresolution-data-loading:latest
     imagePullPolicy: Always
     # I just need something to run while I figure out how to make this work
     command: [ "/bin/bash", "-c", "--" ]

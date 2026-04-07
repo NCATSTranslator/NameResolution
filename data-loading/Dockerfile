@@ -2,7 +2,7 @@
 #
 # A NameResolution worker is a SOLR instance that downloads its source file a SOLR database backup.
 # (see ../Dockerfile and [1] for details). This Dockerfile is intended to create a SOLR instance that can load the
-# data from a set of Babel synonym files (see https://github.com/TranslatorSRI/Babel), thus creating the SOLR backup
+# data from a set of Babel synonym files (see https://github.com/NCATSTranslator/Babel), thus creating the SOLR backup
 # which can be uploaded somewhere for the NameResolution workers.
 #
 # [1] https://github.com/helxplatform/translator-devops/blob/affcf34cf103230d25bdb859098d2a5ac81a49fb/helm/name-lookup/templates/scripts-config-map.yaml#L8-L105
