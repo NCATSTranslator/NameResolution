@@ -146,6 +146,14 @@ async def status(include_metrics: bool = False) -> Dict:
     if 'version' in app_info and app_info['version']:
         nameres_version = 'v' + app_info['version']
 
+    # Prepare recent times for reporting.
+    recent_queries = {
+        'max': RECENT_TIMES_COUNT,
+        'count': len(recent_query_times),
+        'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
+        'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
+    }
+
     # We should have a status for SOLR_CORE_NAME.
     if 'status' in result and SOLR_CORE_NAME in result['status']:
         core = result['status'][SOLR_CORE_NAME]
@@ -173,11 +181,7 @@ async def status(include_metrics: bool = False) -> Dict:
             'segmentCount': index.get('segmentCount', ''),
             'lastModified': index.get('lastModified', ''),
             'size': index.get('size', ''),
-            'recent_queries': {
-                'count': len(recent_query_times),
-                'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
-                'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
-            },
+            'recent_queries': recent_queries,
             'solr_metrics': solr_metrics,
         }
     else:
@@ -185,12 +189,13 @@ async def status(include_metrics: bool = False) -> Dict:
             'status': 'error',
             'message': 'Expected core not found.',
             'babel_version': babel_version,
-            'babel_version_urlg': babel_version_url,
+            'babel_version_url': babel_version_url,
             'biolink_model': {
                 'tag': biolink_model_tag,
                 'url': biolink_model_url,
                 'download_url': biolink_model_download_url,
             },
+            'recent_queries': recent_queries,
             'nameres_version': nameres_version,
             'solr_metrics': solr_metrics,
         }
