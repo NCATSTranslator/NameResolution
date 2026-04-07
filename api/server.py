@@ -36,8 +36,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Solr core name for this application.
+SOLR_CORE_NAME = 'name_lookup_shard1_replica_n1'
+
 # We track the time taken for each Solr query for the last 1000 queries so we can track performance via /status.
-RECENT_TIMES_COUNT = int(os.getenv("RECENT_TIMES_COUNT", 1000))
+DEFAULT_RECENT_TIMES_COUNT = 1000
+RECENT_TIMES_COUNT = int(os.getenv("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_COUNT))
 recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
 recent_solr_times = deque(maxlen=RECENT_TIMES_COUNT)
 
@@ -76,7 +80,6 @@ async def status(include_metrics: bool = False) -> Dict:
         # Fetch Solr query handler, cache, and JVM metrics for strain detection.
         # A single call with group=core&group=jvm retrieves both in one round-trip.
         # Only performed when the caller passes ?metrics=true, as it adds latency.
-        SOLR_CORE_NAME = 'name_lookup_shard1_replica_n1'
         solr_metrics = {
             "message": "Use /status?metrics=true to retrieve these metrics."
         }
@@ -143,9 +146,9 @@ async def status(include_metrics: bool = False) -> Dict:
     if 'version' in app_info and app_info['version']:
         nameres_version = 'v' + app_info['version']
 
-    # We should have a status for name_lookup_shard1_replica_n1.
-    if 'status' in result and 'name_lookup_shard1_replica_n1' in result['status']:
-        core = result['status']['name_lookup_shard1_replica_n1']
+    # We should have a status for SOLR_CORE_NAME.
+    if 'status' in result and SOLR_CORE_NAME in result['status']:
+        core = result['status'][SOLR_CORE_NAME]
 
         index = {}
         if 'index' in core:
@@ -182,7 +185,7 @@ async def status(include_metrics: bool = False) -> Dict:
             'status': 'error',
             'message': 'Expected core not found.',
             'babel_version': babel_version,
-            'babel_version_url': babel_version_url,
+            'babel_version_urlg': babel_version_url,
             'biolink_model': {
                 'tag': biolink_model_tag,
                 'url': biolink_model_url,
