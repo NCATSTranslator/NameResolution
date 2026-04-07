@@ -263,7 +263,7 @@ def test_only_taxa_queries():
 
 
 def test_status_shape():
-    """Verify /status returns expected fields including recent_queries and solr_metrics."""
+    """Verify /status returns expected fields including recent_queries; solr_metrics absent by default."""
     client = TestClient(app)
     response = client.get("/status")
     assert response.status_code == 200
@@ -278,9 +278,20 @@ def test_status_shape():
     assert 'mean_time_ms' in rq
     assert 'mean_solr_time_ms' in rq
 
+    # solr_metrics should not be present unless ?metrics=true is passed.
+    assert 'solr_metrics' not in data
+
+
+def test_status_metrics_param():
+    """With ?metrics=true, solr_metrics is included and has the expected structure."""
+    client = TestClient(app)
+    response = client.get("/status", params={'metrics': 'true'})
+    assert response.status_code == 200
+    data = response.json()
+
+    assert 'solr_metrics' in data
     # solr_metrics may be None if Solr's metrics API is unavailable, but if present
     # it must contain the expected structure.
-    assert 'solr_metrics' in data
     if data['solr_metrics'] is not None:
         sm = data['solr_metrics']
         assert 'query_handler' in sm

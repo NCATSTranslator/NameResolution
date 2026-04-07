@@ -56,12 +56,12 @@ async def docs_redirect():
          description="<p>This endpoint will return status information and a list of counts from the underlying Solr database instance for this NameRes instance.</p>"
                      "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#status\">API documentation</a>.</p>"
          )
-async def status_get() -> Dict:
+async def status_get(metrics: bool = False) -> Dict:
     """ Return status and count information from the underyling Solr instance. """
-    return await status()
+    return await status(metrics)
 
 
-async def status() -> Dict:
+async def status(include_metrics: bool = False) -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
     metrics_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/metrics"
@@ -75,49 +75,51 @@ async def status() -> Dict:
 
         # Fetch Solr query handler, cache, and JVM metrics for strain detection.
         # A single call with group=core&group=jvm retrieves both in one round-trip.
+        # Only performed when the caller passes ?metrics=true, as it adds latency.
         SOLR_CORE_NAME = 'name_lookup_shard1_replica_n1'
         solr_metrics = None
-        try:
-            metrics_resp = await client.get(metrics_url, params=[
-                ('group', 'core'),
-                ('group', 'jvm'),
-                ('prefix', 'QUERY./select,CACHE.core.queryResultCache'),
-                ('prefix', 'memory.heap,os.processCpuLoad'),
-                ('wt', 'json'),
-            ])
-            if metrics_resp.status_code < 300:
-                all_metrics = metrics_resp.json().get('metrics', {})
+        if include_metrics:
+            try:
+                metrics_resp = await client.get(metrics_url, params=[
+                    ('group', 'core'),
+                    ('group', 'jvm'),
+                    ('prefix', 'QUERY./select,CACHE.core.queryResultCache'),
+                    ('prefix', 'memory.heap,os.processCpuLoad'),
+                    ('wt', 'json'),
+                ])
+                if metrics_resp.status_code < 300:
+                    all_metrics = metrics_resp.json().get('metrics', {})
 
-                core_data = all_metrics.get(f'solr.core.{SOLR_CORE_NAME}', {})
-                qh = core_data.get('QUERY./select.requestTimes', {})
-                cache = core_data.get('CACHE.core.queryResultCache', {})
-                heap = all_metrics.get('solr.jvm', {}).get('memory.heap', {})
-                cpu = all_metrics.get('solr.jvm', {}).get('os.processCpuLoad', None)
+                    core_data = all_metrics.get(f'solr.core.{SOLR_CORE_NAME}', {})
+                    qh = core_data.get('QUERY./select.requestTimes', {})
+                    cache = core_data.get('CACHE.core.queryResultCache', {})
+                    heap = all_metrics.get('solr.jvm', {}).get('memory.heap', {})
+                    cpu = all_metrics.get('solr.jvm', {}).get('os.processCpuLoad', None)
 
-                solr_metrics = {
-                    'query_handler': {
-                        'requests': core_data.get('QUERY./select.requests'),
-                        'errors': core_data.get('QUERY./select.errors'),
-                        'timeouts': core_data.get('QUERY./select.timeouts'),
-                        'mean_ms': qh.get('mean_ms'),
-                        'p75_ms': qh.get('p75_ms'),
-                        'p95_ms': qh.get('p95_ms'),
-                        'p99_ms': qh.get('p99_ms'),
-                    },
-                    'cache': {
-                        'hitratio': cache.get('hitratio'),
-                        'evictions': cache.get('evictions'),
-                        'size': cache.get('size'),
-                    },
-                    'jvm': {
-                        'heap_used_mb': round(heap.get('used', 0) / 1_048_576, 1) if 'used' in heap else None,
-                        'heap_max_mb': round(heap.get('max', 0) / 1_048_576, 1) if 'max' in heap else None,
-                        'heap_used_pct': round(heap.get('used', 0) / heap['max'] * 100, 1) if heap.get('max') else None,
-                        'cpu_load': cpu,
-                    },
-                }
-        except Exception:
-            logger.warning("Failed to retrieve Solr metrics for /status", exc_info=True)
+                    solr_metrics = {
+                        'query_handler': {
+                            'requests': core_data.get('QUERY./select.requests'),
+                            'errors': core_data.get('QUERY./select.errors'),
+                            'timeouts': core_data.get('QUERY./select.timeouts'),
+                            'mean_ms': qh.get('mean_ms'),
+                            'p75_ms': qh.get('p75_ms'),
+                            'p95_ms': qh.get('p95_ms'),
+                            'p99_ms': qh.get('p99_ms'),
+                        },
+                        'cache': {
+                            'hitratio': cache.get('hitratio'),
+                            'evictions': cache.get('evictions'),
+                            'size': cache.get('size'),
+                        },
+                        'jvm': {
+                            'heap_used_mb': round(heap.get('used', 0) / 1_048_576, 1) if 'used' in heap else None,
+                            'heap_max_mb': round(heap.get('max', 0) / 1_048_576, 1) if 'max' in heap else None,
+                            'heap_used_pct': round(heap.get('used', 0) / heap['max'] * 100, 1) if heap.get('max') else None,
+                            'cpu_load': cpu,
+                        },
+                    }
+            except Exception:
+                logger.warning("Failed to retrieve Solr metrics for /status", exc_info=True)
 
     result = response.json()
 
@@ -169,7 +171,7 @@ async def status() -> Dict:
                 'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
                 'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
             },
-            'solr_metrics': solr_metrics,
+            **(({'solr_metrics': solr_metrics}) if include_metrics else {}),
         }
     else:
         return {
