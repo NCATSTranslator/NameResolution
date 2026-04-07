@@ -41,14 +41,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# We track the time taken for each Solr query for the last 1000 queries so we can track performance via /status.
-RECENT_TIMES_COUNT = os.getenv("RECENT_TIMES_COUNT", 1000)
-recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
-
-# We track query start timestamps separately for rate estimation (see documentation/Performance.md).
-# A larger maxlen allows rate computation over meaningful windows even at high query rates.
-RECENT_QUERY_TIMESTAMPS_COUNT = int(os.getenv("RECENT_QUERY_TIMESTAMPS_COUNT", 50000))
-recent_query_timestamps = deque(maxlen=RECENT_QUERY_TIMESTAMPS_COUNT)
+# We track (timestamp_s, duration_ms) for recent queries to compute both latency and rate stats.
+# A large default covers ~100s at 500 qps, giving meaningful rate windows even under heavy load.
+QUERY_LOG_SIZE = int(os.getenv("QUERY_LOG_SIZE", 50000))
+query_log: deque = deque(maxlen=QUERY_LOG_SIZE)
 
 # Queries slower than this threshold will be logged at WARNING level (see documentation/Performance.md).
 SLOW_QUERY_THRESHOLD_MS = float(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
@@ -164,40 +160,65 @@ async def status() -> Dict:
             "queryResultCache": extract_cache("queryResultCache"),
         }
 
-    # Compute percentiles from recent query times.
-    times = list(recent_query_times)
-    if len(times) >= 2:
-        qs = statistics.quantiles(times, n=100)
+    # Unpack query_log into parallel lists for latency and rate computations.
+    log_snapshot = list(query_log)  # snapshot to avoid mutation during computation
+    timestamps = [ts for ts, _ in log_snapshot]
+    durations = [dur for _, dur in log_snapshot]
+
+    # Latency percentiles.
+    if len(durations) >= 2:
+        qs = statistics.quantiles(durations, n=100)
         p50, p95, p99 = qs[49], qs[94], qs[98]
     else:
         p50 = p95 = p99 = None
 
-    # Compute query rates from the timestamp deque. Scan from the right (newest) so we stop
-    # early for short windows rather than walking the whole deque.
+    # Inter-arrival times (gaps between consecutive query start timestamps, in ms).
+    inter_arrival_ms = None
+    if len(timestamps) >= 2:
+        gaps = [(timestamps[i] - timestamps[i - 1]) * 1000 for i in range(1, len(timestamps))]
+        gaps_sorted = sorted(gaps)
+        inter_arrival_ms = {
+            'mean': round(sum(gaps) / len(gaps), 2),
+            'median': round(statistics.median(gaps), 2),
+            'min': round(gaps_sorted[0], 2),
+            'max': round(gaps_sorted[-1], 2),
+            'p95': round(statistics.quantiles(gaps, n=100)[94], 2),
+        }
+
+    # Windowed query rates. Scan from newest to oldest, stopping at the largest window.
     now = time.time()
-    count_60s = 0
-    count_300s = 0
-    for ts in reversed(recent_query_timestamps):
+    count_10s = count_60s = count_300s = 0
+    for ts in reversed(timestamps):
         age = now - ts
         if age <= 300:
             count_300s += 1
             if age <= 60:
                 count_60s += 1
+                if age <= 10:
+                    count_10s += 1
         else:
             break
 
+    history_span = (timestamps[-1] - timestamps[0]) if len(timestamps) >= 2 else 0
+    time_since_last = (now - timestamps[-1]) if timestamps else None
+
     recent_queries = {
-        'count': len(recent_query_times),
-        'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else -1,
+        'count': len(durations),
+        'mean_time_ms': round(sum(durations) / len(durations), 2) if durations else -1,
         'p50_ms': p50,
         'p95_ms': p95,
         'p99_ms': p99,
-        'recent_times_ms': list(recent_query_times),
+        'recent_times_ms': durations[-1000:],
         'rate': {
+            'history_span_seconds': round(history_span, 1),
+            'time_since_last_query_seconds': round(time_since_last, 2) if time_since_last is not None else None,
+            'queries_last_10s': count_10s,
+            'queries_per_second_last_10s': round(count_10s / 10, 2),
             'queries_last_60s': count_60s,
             'queries_per_second_last_60s': round(count_60s / 60, 2),
             'queries_last_300s': count_300s,
             'queries_per_second_last_300s': round(count_300s / 300, 2),
+            'inter_arrival_ms': inter_arrival_ms,
         },
     }
 
@@ -677,8 +698,7 @@ async def lookup(string: str,
     time_end = time.time_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
     solr_ms = (time_solr_end - time_solr_start)/1_000_000
-    recent_query_times.append(time_taken_ms)
-    recent_query_timestamps.append(time_start / 1_000_000_000)
+    query_log.append((time_start / 1_000_000_000, time_taken_ms))
     log_msg = (
         f"Lookup query to Solr for {json.dumps(string)} "
         f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, "

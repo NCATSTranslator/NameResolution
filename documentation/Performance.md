@@ -26,17 +26,23 @@ These are tracked by the Python process and reflect the full round-trip time see
 
 #### Rate (`recent_queries.rate`)
 
-Computed from a separate timestamp deque (up to `RECENT_QUERY_TIMESTAMPS_COUNT` entries,
-default 50,000) that records the start time of every query. The large size ensures rate
-estimates remain accurate even at high query rates (e.g., 500 qps fills 1000 entries in
-2 seconds, but 50,000 entries covers 100 seconds).
+Query start timestamps and durations are stored together in a single `query_log` deque
+(up to `QUERY_LOG_SIZE` entries, default 50,000). The large size ensures rate estimates
+stay meaningful even at high query rates (e.g., 500 qps fills 1,000 entries in 2 seconds,
+but 50,000 entries covers 100 seconds).
 
 | Field | What it means |
 |---|---|
-| `queries_last_60s` | Raw count of queries in the last 60 seconds. |
-| `queries_per_second_last_60s` | 1-minute average rate. Use this for current load. |
-| `queries_last_300s` | Raw count in the last 5 minutes. |
-| `queries_per_second_last_300s` | 5-minute average rate. Use this to smooth over short bursts. |
+| `history_span_seconds` | Time from the oldest to newest entry in the log. Shows how much history backs the rate estimates. |
+| `time_since_last_query_seconds` | Seconds since the most recent query. Large values mean the service is idle and windowed rates are stale. |
+| `queries_last_10s` / `queries_per_second_last_10s` | 10-second window. Use this to catch the onset of a spike before the 60s average catches up. |
+| `queries_last_60s` / `queries_per_second_last_60s` | 1-minute average rate. Use this for current load. |
+| `queries_last_300s` / `queries_per_second_last_300s` | 5-minute average rate. Use this to smooth over short bursts. |
+| `inter_arrival_ms.mean` | Average gap between consecutive queries in ms. Equals 1000 / mean_qps; cross-checks the windowed rates. |
+| `inter_arrival_ms.median` | Median gap. More robust than mean under burst traffic. |
+| `inter_arrival_ms.min` | Tightest burst observed — how closely packed the busiest queries were. |
+| `inter_arrival_ms.max` | Longest idle gap in the log window. |
+| `inter_arrival_ms.p95` | 95% of queries arrive within this gap. |
 
 The key diagnostic use: **if Solr is slow AND the query rate is high**, the cause is likely
 load rather than an internal Solr problem. If the rate is normal but Solr is slow, look at
@@ -182,7 +188,6 @@ Solr seems slow or the service is unresponsive
 |---|---|---|
 | `SOLR_HOST` | `localhost` | Solr hostname |
 | `SOLR_PORT` | `8983` | Solr port |
-| `RECENT_TIMES_COUNT` | `1000` | How many recent query durations to track (affects latency percentiles) |
-| `RECENT_QUERY_TIMESTAMPS_COUNT` | `50000` | How many query timestamps to retain for rate estimation. At 500 qps this covers ~100 seconds; lower to reduce memory use on low-traffic instances. |
+| `QUERY_LOG_SIZE` | `50000` | How many `(timestamp, duration)` pairs to retain. Covers both latency percentiles and rate estimation. At 500 qps this covers ~100 seconds; lower to reduce memory on low-traffic instances. |
 | `SLOW_QUERY_THRESHOLD_MS` | `500` | Queries slower than this are logged at WARNING level |
 | `LOGLEVEL` | `INFO` | Set to `DEBUG` to log full Solr request/response JSON for every query |
