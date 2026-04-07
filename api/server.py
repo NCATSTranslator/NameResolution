@@ -162,6 +162,9 @@ async def status() -> Dict:
 
     # Unpack query_log into parallel lists for latency and rate computations.
     log_snapshot = list(query_log)  # snapshot to avoid mutation during computation
+    # Sort by timestamp: concurrent requests complete in a different order than they started,
+    # so insertion order does not reflect arrival order.
+    log_snapshot.sort(key=lambda x: x[0])
     timestamps = [ts for ts, _ in log_snapshot]
     durations = [dur for _, dur in log_snapshot]
 
