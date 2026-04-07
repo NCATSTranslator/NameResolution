@@ -10,7 +10,7 @@
 # Use the RENCI Python image to make it easier to work with other
 # RENCI Docker packages and to make sure we have an up to date image.
 # (https://github.com/TranslatorSRI/RENCI-Python-image)
-FROM ghcr.io/translatorsri/renci-python-image:3.11.5
+FROM ghcr.io/translatorsri/renci-python-image:3.12.4
 
 # Configuration options:
 # - ${ROOT} is where the source code will be copied.
