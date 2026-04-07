@@ -7,8 +7,10 @@
   * The curie with the shortest match is first, etc.
   * Matching names are returned first, followed by non-matching names
 """
+import asyncio
 import json
 import logging
+import statistics
 import time
 import warnings
 import os
@@ -43,6 +45,9 @@ app.add_middleware(
 RECENT_TIMES_COUNT = os.getenv("RECENT_TIMES_COUNT", 1000)
 recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
 
+# Queries slower than this threshold will be logged at WARNING level (see documentation/Performance.md).
+SLOW_QUERY_THRESHOLD_MS = float(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
+
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
 @app.get("/", include_in_schema=False)
@@ -65,15 +70,39 @@ async def status_get() -> Dict:
 
 async def status() -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
-    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
+    cores_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
+    sysinfo_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/info/system"
+    mbeans_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/admin/mbeans"
+
+    async def fetch_sysinfo(client):
+        try:
+            r = await client.get(sysinfo_url, params={"wt": "json"})
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logger.warning("Could not fetch Solr system info: %s", e)
+            return None
+
+    async def fetch_cache_mbeans(client):
+        try:
+            r = await client.get(mbeans_url, params={"cat": "CACHE", "stats": "true", "wt": "json"})
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logger.warning("Could not fetch Solr cache MBeans: %s", e)
+            return None
+
     async with httpx.AsyncClient(timeout=None) as client:
-        response = await client.get(query_url, params={
-            'action': 'STATUS'
-        })
-    if response.status_code >= 300:
-        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
-        response.raise_for_status()
-    result = response.json()
+        cores_response, sysinfo_data, mbeans_data = await asyncio.gather(
+            client.get(cores_url, params={"action": "STATUS"}),
+            fetch_sysinfo(client),
+            fetch_cache_mbeans(client),
+        )
+
+    if cores_response.status_code >= 300:
+        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", cores_response.text)
+        cores_response.raise_for_status()
+    result = cores_response.json()
 
     # Do we know the Babel version and version URL? It will be stored in an environmental variable if we do.
     babel_version = os.environ.get("BABEL_VERSION", "unknown")
@@ -90,6 +119,62 @@ async def status() -> Dict:
     app_info = get_app_info()
     if 'version' in app_info and app_info['version']:
         nameres_version = 'v' + app_info['version']
+
+    # Build JVM and OS info from the system info response.
+    jvm_info = None
+    os_info = None
+    if sysinfo_data:
+        jvm_raw = sysinfo_data.get("jvm", {}).get("memory", {}).get("raw", {})
+        heap_used = jvm_raw.get("used")
+        heap_max = jvm_raw.get("max")
+        jvm_info = {
+            "heap_used_bytes": heap_used,
+            "heap_max_bytes": heap_max,
+            "heap_used_pct": round(heap_used / heap_max, 4) if heap_used and heap_max else None,
+        }
+        system = sysinfo_data.get("system", {})
+        os_info = {
+            "process_cpu_load": system.get("processCpuLoad"),
+            "system_cpu_load": system.get("systemCpuLoad"),
+            "free_physical_memory_bytes": system.get("freePhysicalMemorySize"),
+            "total_physical_memory_bytes": system.get("totalPhysicalMemorySize"),
+        }
+
+    # Build cache stats from the MBeans response.
+    cache_info = None
+    if mbeans_data:
+        def extract_cache(name):
+            for entry in mbeans_data.get("solr-mbeans", []):
+                if isinstance(entry, dict) and name in entry:
+                    stats = entry[name].get("stats", {})
+                    return {
+                        "hitratio": stats.get("hitratio"),
+                        "evictions": stats.get("evictions"),
+                        "size": stats.get("size"),
+                        "maxSize": stats.get("maxSize"),
+                    }
+            return None
+        cache_info = {
+            "filterCache": extract_cache("filterCache"),
+            "queryResultCache": extract_cache("queryResultCache"),
+        }
+
+    # Compute percentiles from recent query times.
+    times = list(recent_query_times)
+    if len(times) >= 2:
+        qs = statistics.quantiles(times, n=100)
+        p50, p95, p99 = qs[49], qs[94], qs[98]
+    else:
+        p50 = p95 = p99 = None
+
+    recent_queries = {
+        'count': len(recent_query_times),
+        'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else -1,
+        'p50_ms': p50,
+        'p95_ms': p95,
+        'p99_ms': p99,
+        'recent_times_ms': list(recent_query_times),
+    }
 
     # We should have a status for name_lookup_shard1_replica_n1.
     if 'status' in result and 'name_lookup_shard1_replica_n1' in result['status']:
@@ -118,11 +203,10 @@ async def status() -> Dict:
             'segmentCount': index.get('segmentCount', ''),
             'lastModified': index.get('lastModified', ''),
             'size': index.get('size', ''),
-            'recent_queries': {
-                'count': len(recent_query_times),
-                'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else -1,
-                'recent_times_ms': list(recent_query_times),
-            }
+            'recent_queries': recent_queries,
+            'jvm': jvm_info,
+            'os': os_info,
+            'cache': cache_info,
         }
     else:
         return {
@@ -136,6 +220,8 @@ async def status() -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
+            'jvm': jvm_info,
+            'os': os_info,
         }
 
 
@@ -561,11 +647,19 @@ async def lookup(string: str,
 
     time_end = time.time_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
+    solr_ms = (time_solr_end - time_solr_start)/1_000_000
     recent_query_times.append(time_taken_ms)
-    logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
-                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}) "
-                 f"took {time_taken_ms:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
+    log_msg = (
+        f"Lookup query to Solr for {json.dumps(string)} "
+        f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, "
+        f"biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, "
+        f"only_taxa={only_taxa}) "
+        f"took {time_taken_ms:.2f}ms (with {solr_ms:.2f}ms waiting for Solr)"
     )
+    if time_taken_ms > SLOW_QUERY_THRESHOLD_MS:
+        logger.warning("SLOW QUERY: " + log_msg)
+    else:
+        logger.info(log_msg)
 
     return outputs
 
