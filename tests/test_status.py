@@ -18,12 +18,13 @@ def test_status():
     assert 'biolink_model' in status
     assert 'tag' in status['biolink_model']
     assert 'nameres_version' in status
-    assert status['version'] > 1
-    assert status['size'] != ''
-    assert status['startTime']
+
+    solr = status['solr']
+    assert solr['version'] != ''
+    assert solr['size'] != ''
+    assert solr['startTime']
 
     # Count the specific number of test documents we load.
-    assert status['numDocs'] == 89
-    assert status['maxDoc'] == 89
-    assert status['deletedDocs'] == 0
-
+    assert solr['numDocs'] == 89
+    assert solr['maxDoc'] == 89
+    assert solr['deletedDocs'] == 0

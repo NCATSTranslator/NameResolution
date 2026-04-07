@@ -176,8 +176,9 @@ async def status() -> Dict:
         p50 = p95 = p99 = None
 
     # Inter-arrival times (gaps between consecutive query start timestamps, in ms).
+    # Requires >= 3 timestamps (>= 2 gaps) because statistics.quantiles needs at least 2 data points.
     inter_arrival_ms = None
-    if len(timestamps) >= 2:
+    if len(timestamps) >= 3:
         gaps = [(timestamps[i] - timestamps[i - 1]) * 1000 for i in range(1, len(timestamps))]
         gaps_sorted = sorted(gaps)
         inter_arrival_ms = {
