@@ -616,10 +616,11 @@ async def lookup(string: str,
 
     time_end = time.time_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
+    time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
     recent_query_times.append(time_taken_ms)
     logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
                  f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
-                 f"took {time_taken_ms:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
+                 f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms waiting for Solr)"
     )
 
     return outputs
