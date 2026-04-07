@@ -20,9 +20,8 @@ These are tracked by the Python process and reflect the full round-trip time see
 
 | Field | What it means |
 |---|---|
-| `mean_time_ms` | Average round-trip time (Python → Solr → Python) for the last N queries (`RECENT_TIMES_COUNT`, default 1000). Rising mean = sustained slowdown. |
+| `mean_time_ms` | Average round-trip time (Python → Solr → Python) over the entries in `query_log`. Rising mean = sustained slowdown. |
 | `p50_ms` / `p95_ms` / `p99_ms` | Latency percentiles over the same window. p50 rising = every query is slow. p99 spiking but p50 stable = occasional GC pauses or one-off expensive queries. |
-| `recent_times_ms` | The raw list. Useful for spotting bimodal distributions (fast + slow clusters). |
 
 #### Rate (`recent_queries.rate`)
 

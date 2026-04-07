@@ -208,7 +208,6 @@ async def status() -> Dict:
         'p50_ms': p50,
         'p95_ms': p95,
         'p99_ms': p99,
-        'recent_times_ms': durations[-1000:],
         'rate': {
             'history_span_seconds': round(history_span, 1),
             'time_since_last_query_seconds': round(time_since_last, 2) if time_since_last is not None else None,
