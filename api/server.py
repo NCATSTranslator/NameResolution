@@ -45,6 +45,11 @@ app.add_middleware(
 RECENT_TIMES_COUNT = os.getenv("RECENT_TIMES_COUNT", 1000)
 recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
 
+# We track query start timestamps separately for rate estimation (see documentation/Performance.md).
+# A larger maxlen allows rate computation over meaningful windows even at high query rates.
+RECENT_QUERY_TIMESTAMPS_COUNT = int(os.getenv("RECENT_QUERY_TIMESTAMPS_COUNT", 50000))
+recent_query_timestamps = deque(maxlen=RECENT_QUERY_TIMESTAMPS_COUNT)
+
 # Queries slower than this threshold will be logged at WARNING level (see documentation/Performance.md).
 SLOW_QUERY_THRESHOLD_MS = float(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
 
@@ -167,6 +172,20 @@ async def status() -> Dict:
     else:
         p50 = p95 = p99 = None
 
+    # Compute query rates from the timestamp deque. Scan from the right (newest) so we stop
+    # early for short windows rather than walking the whole deque.
+    now = time.time()
+    count_60s = 0
+    count_300s = 0
+    for ts in reversed(recent_query_timestamps):
+        age = now - ts
+        if age <= 300:
+            count_300s += 1
+            if age <= 60:
+                count_60s += 1
+        else:
+            break
+
     recent_queries = {
         'count': len(recent_query_times),
         'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else -1,
@@ -174,6 +193,12 @@ async def status() -> Dict:
         'p95_ms': p95,
         'p99_ms': p99,
         'recent_times_ms': list(recent_query_times),
+        'rate': {
+            'queries_last_60s': count_60s,
+            'queries_per_second_last_60s': round(count_60s / 60, 2),
+            'queries_last_300s': count_300s,
+            'queries_per_second_last_300s': round(count_300s / 300, 2),
+        },
     }
 
     # We should have a status for name_lookup_shard1_replica_n1.
@@ -649,6 +674,7 @@ async def lookup(string: str,
     time_taken_ms = (time_end - time_start)/1_000_000
     solr_ms = (time_solr_end - time_solr_start)/1_000_000
     recent_query_times.append(time_taken_ms)
+    recent_query_timestamps.append(time_start / 1_000_000_000)
     log_msg = (
         f"Lookup query to Solr for {json.dumps(string)} "
         f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, "

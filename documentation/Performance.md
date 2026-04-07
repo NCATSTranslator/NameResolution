@@ -1,200 +1,178 @@
 # NameRes Performance Diagnostics
 
 This document explains how to diagnose why Solr may be slow or under strain, using the
-observability built into NameRes. It covers what the existing metrics mean, what additional
-metrics can be added to the code, and a decision tree for identifying CPU pressure, memory
-pressure, and other causes.
+observability built into NameRes. It covers what the metrics in `/status` mean, how to
+read the log messages, and a decision tree for identifying CPU pressure, memory pressure,
+high query rate, and other causes.
 
 ---
 
-## 1. Current observability
+## 1. `/status` response fields
 
-### `GET /status` — response fields
+### Index health
 
 | Field | What it means |
 |---|---|
-| `recent_queries.mean_time_ms` | Average round-trip time (Python → Solr → Python) for the last N queries (N set by `RECENT_TIMES_COUNT`, default 1000). Rising mean = sustained slowdown. |
-| `recent_queries.recent_times_ms` | The raw list of timings. Scan for a long tail of high values (occasional spikes) vs. a uniformly elevated distribution (sustained slowness). |
-| `segmentCount` | Number of Lucene segments in the index. A value above ~20 means Solr is doing more per-segment work per query. Consider triggering a Solr optimize (`/solr/name_lookup/update?optimize=true`). |
-| `numDocs` / `maxDoc` | `maxDoc - numDocs = deletedDocs` (soft deletes not yet merged). A very high deleted count combined with high segment count amplifies query cost. |
+| `segmentCount` | Number of Lucene segments. Above ~20 means Solr does more per-segment work per query. Consider triggering an optimize (`POST /solr/name_lookup/update?optimize=true`). |
+| `numDocs` / `maxDoc` | `maxDoc - numDocs` = soft-deleted docs not yet merged. High deleted count + high segment count amplifies query cost. |
 | `size` | Index size on disk. Unexpectedly small may indicate an incomplete data load. |
 
-### Log messages
+### Query latency (`recent_queries`)
 
-Every call to `lookup()` emits a line at INFO level:
+| Field | What it means |
+|---|---|
+| `mean_time_ms` | Average round-trip time (Python → Solr → Python) for the last N queries (`RECENT_TIMES_COUNT`, default 1000). Rising mean = sustained slowdown. |
+| `p50_ms` / `p95_ms` / `p99_ms` | Latency percentiles over the same window. p50 rising = every query is slow. p99 spiking but p50 stable = occasional GC pauses or one-off expensive queries. |
+| `recent_times_ms` | The raw list. Useful for spotting bimodal distributions (fast + slow clusters). |
+
+### Query rate (`recent_queries.rate`)
+
+Computed from a separate timestamp deque (up to `RECENT_QUERY_TIMESTAMPS_COUNT` entries,
+default 50,000) that records the start time of every query. The large size ensures rate
+estimates remain accurate even at high query rates (e.g., 500 qps fills 1000 entries in
+2 seconds, but 50,000 entries covers 100 seconds).
+
+| Field | What it means |
+|---|---|
+| `queries_last_60s` | Raw count of queries in the last 60 seconds. |
+| `queries_per_second_last_60s` | 1-minute average rate. Use this for current load. |
+| `queries_last_300s` | Raw count in the last 5 minutes. |
+| `queries_per_second_last_300s` | 5-minute average rate. Use this to smooth over short bursts. |
+
+The key diagnostic use: **if Solr is slow AND the query rate is high**, the cause is likely
+load rather than an internal Solr problem. If the rate is normal but Solr is slow, look at
+JVM/OS metrics.
+
+### JVM and OS (`jvm`, `os`)
+
+Fetched in parallel from Solr's `/solr/admin/info/system` endpoint.
+
+| Field | What it means |
+|---|---|
+| `jvm.heap_used_pct` | Fraction of JVM heap in use (0.0–1.0). **>0.80 = memory pressure.** |
+| `jvm.heap_used_bytes` / `jvm.heap_max_bytes` | Absolute heap figures. Max is set by `-Xmx` in Solr's JVM config. |
+| `os.process_cpu_load` | Solr process CPU (0.0–1.0). **>0.80 = CPU saturation.** |
+| `os.system_cpu_load` | Host-wide CPU. If higher than process load, other processes are competing. |
+| `os.free_physical_memory_bytes` | OS RAM available. If low, the OS may be swapping. |
+
+These fields are `null` if the Solr admin endpoint is unreachable (a warning is logged).
+
+### Cache statistics (`cache`)
+
+Fetched in parallel from Solr's MBeans endpoint. Reports `filterCache` and `queryResultCache`.
+
+| Field | What it means |
+|---|---|
+| `hitratio` | Fraction of cache lookups that were hits. Should be >0.90. Below 0.50 = Solr is re-computing filters on nearly every query. |
+| `evictions` | Rising count = cache too small for the working set (a symptom of memory pressure). |
+| `size` / `maxSize` | Current entries vs. configured maximum. If `size ≈ maxSize`, the cache is full and evictions are likely. |
+
+Cache sizes are configured in Solr's `solrconfig.xml`. If evictions are high, increase
+`<maxSize>` for the affected cache — or investigate whether requests use many distinct
+filter combinations that defeat caching.
+
+---
+
+## 2. Log messages
+
+Every call to `lookup()` emits a line at INFO (or WARNING if slow):
 
 ```
-INFO: Lookup query to Solr for "diabetes" (autocomplete=False, highlighting=False, offset=0, limit=10,
-      biolink_types=['biolink:Disease'], only_prefixes=None, exclude_prefixes=None, only_taxa=None)
-      took 123.45ms (with 100.12ms waiting for Solr)
+INFO: Lookup query to Solr for "diabetes" (autocomplete=False, highlighting=False, offset=0,
+      limit=10, biolink_types=['biolink:Disease'], only_prefixes=None, exclude_prefixes=None,
+      only_taxa=None) took 123.45ms (with 100.12ms waiting for Solr)
+```
+
+```
+WARNING: SLOW QUERY: Lookup query to Solr for "..." ... took 850.12ms (with 840.00ms waiting for Solr)
 ```
 
 Key interpretation:
 - **"waiting for Solr" ≈ total** → the bottleneck is inside Solr (JVM, index, caches).
-- **"waiting for Solr" is small but total is high** → the bottleneck is in Python result processing
-  (e.g., large result sets being deserialized or filtered).
-- **Consistent high "waiting for Solr"** → follow the decision tree below.
-
----
-
-## 2. Proposed additional metrics
-
-The following additions to `api/server.py` would give full visibility into Solr internals.
-Each is independent and can be implemented separately.
-
-### 2a. JVM and OS info
-
-Add a call to `/solr/admin/info/system?wt=json` in the `status()` function, run in parallel
-with the existing `/solr/admin/cores` call using `asyncio.gather()`. Expose these fields in
-the status response under `"jvm"` and `"os"` keys:
-
-| New field | Solr JSON path | What it diagnoses |
-|---|---|---|
-| `jvm.heap_used_pct` | `jvm.memory.raw.used / jvm.memory.raw.max` | **>80% = memory pressure** |
-| `jvm.heap_used_bytes` | `jvm.memory.raw.used` | Absolute heap consumption |
-| `jvm.heap_max_bytes` | `jvm.memory.raw.max` | JVM -Xmx ceiling |
-| `os.process_cpu_load` | `system.processCpuLoad` (0.0–1.0) | **>0.8 = CPU saturation** |
-| `os.system_cpu_load` | `system.systemCpuLoad` (0.0–1.0) | Host-wide CPU (other processes) |
-| `os.free_physical_memory_bytes` | `system.freePhysicalMemorySize` | OS RAM available to JVM |
-| `os.total_physical_memory_bytes` | `system.totalPhysicalMemorySize` | Total host RAM |
-
-Example `status()` change (simplified):
-```python
-import asyncio, statistics
-
-async with httpx.AsyncClient(timeout=None) as client:
-    cores_resp, sysinfo_resp, mbeans_resp = await asyncio.gather(
-        client.get(f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores", params={"action": "STATUS"}),
-        client.get(f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/info/system", params={"wt": "json"}),
-        client.get(f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/admin/mbeans",
-                   params={"cat": "CACHE", "stats": "true", "wt": "json"}),
-    )
-```
-
-### 2b. Cache hit/eviction statistics
-
-From the MBeans call above, extract Solr's internal cache statistics under a `"cache"` key:
-
-| New field | What to watch for |
-|---|---|
-| `cache.filterCache.hitratio` | Should be >0.9. Below 0.5 = Solr re-computing every filter query. |
-| `cache.filterCache.evictions` | Rising count = cache too small for the query working set. |
-| `cache.queryResultCache.hitratio` | Same interpretation as filterCache. |
-| `cache.queryResultCache.evictions` | Same interpretation as filterCache. |
-
-Cache sizes are configured in Solr's `solrconfig.xml`. If evictions are high, increase
-`<maxSize>` for the affected cache, or investigate whether requests use many distinct
-filter combinations that will never cache well.
-
-### 2c. Query time percentiles
-
-The existing `recent_query_times` deque holds up to 1000 timings. Currently only the mean
-is exposed. Add p50/p95/p99 to `recent_queries` using `statistics.quantiles(data, n=100)`:
-
-```python
-import statistics
-times = list(recent_query_times)
-if len(times) >= 2:
-    qs = statistics.quantiles(times, n=100)
-    p50, p95, p99 = qs[49], qs[94], qs[98]
-```
-
-These distinguish:
-- **p50 rising** = sustained overload (every query is slow)
-- **p99 spiking but p50 stable** = occasional GC pauses or one-off expensive queries
-
-### 2d. Slow query warning logs
-
-Add an environment variable `SLOW_QUERY_THRESHOLD_MS` (default: 500). In `lookup()`, after
-the existing INFO log line, add:
-
-```python
-SLOW_QUERY_THRESHOLD_MS = float(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
-
-# ... inside lookup(), after computing time_taken_ms:
-if time_taken_ms > SLOW_QUERY_THRESHOLD_MS:
-    logger.warning(
-        f"SLOW QUERY ({time_taken_ms:.2f}ms, {solr_ms:.2f}ms in Solr): "
-        f"query={json.dumps(string)}, autocomplete={autocomplete}, "
-        f"biolink_types={biolink_types}, only_prefixes={only_prefixes}, "
-        f"exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}, "
-        f"results={len(outputs)}"
-    )
-```
-
-This surfaces outlier queries in log aggregators (e.g., CloudWatch, Datadog) without
-needing to poll the status endpoint or scan INFO-level logs.
+- **"waiting for Solr" is small, total is high** → the bottleneck is Python result processing
+  (large result sets being deserialized or filtered).
+- A WARNING is emitted when total time exceeds `SLOW_QUERY_THRESHOLD_MS` (default 500ms).
+  Set `LOGLEVEL=DEBUG` to also log the full Solr request and response JSON.
 
 ---
 
 ## 3. Diagnostic decision tree
 
-Use this when Solr seems slow or unresponsive.
-
 ```
-Solr seems slow or strained
+Solr seems slow or the service is unresponsive
 │
-├─ Step 1: Check logs for "waiting for Solr" vs total time
+├─ Step 1: Check recent_queries.rate in /status
+│    │
+│    ├─ queries_per_second_last_60s is unusually high (e.g. 10x normal)
+│    │    → HIGH QUERY RATE is driving the load
+│    │       Check: are requests batching correctly? (use /reverse_lookup or /bulk_lookup)
+│    │       Check: is a client in a retry loop? (look for repeated identical queries in logs)
+│    │       Fix: rate-limit upstream callers; scale horizontally
+│    │
+│    └─ Rate is normal → the problem is internal to Solr → continue
+│
+├─ Step 2: Check log messages for "waiting for Solr" vs total time
 │    │
 │    ├─ "waiting for Solr" is small, total is high
 │    │    → Python result-processing bottleneck
-│    │       Check: large result sets (increase Solr's limit param or reduce result size)
-│    │       Check: Python CPU at capacity (scale horizontally)
+│    │       Check: is limit very large? High result counts = expensive deserialization
+│    │       Check: Python process CPU (scale horizontally if saturated)
 │    │
-│    └─ "waiting for Solr" is most of total → problem is INSIDE Solr → continue below
+│    └─ "waiting for Solr" is most of total → problem is INSIDE Solr → continue
 │
-├─ Step 2: Check jvm.heap_used_pct in /status (requires 2a above)
+├─ Step 3: Check jvm.heap_used_pct in /status
 │    │
-│    ├─ >80% → MEMORY PRESSURE
+│    ├─ >0.80 → MEMORY PRESSURE
 │    │    │
-│    │    ├─ Check cache.filterCache.evictions (requires 2b above)
-│    │    │    ├─ Rising evictions → cache is too small
-│    │    │    │    Fix: increase <maxSize> in Solr's solrconfig.xml filterCache config
-│    │    │    └─ No evictions but heap still high → data itself is large
-│    │    │         Fix: increase JVM -Xmx (SOLR_JAVA_MEM in Solr's env config)
+│    │    ├─ Check cache.filterCache.evictions
+│    │    │    ├─ Rising evictions → cache is too small for the working set
+│    │    │    │    Fix: increase <maxSize> in solrconfig.xml for filterCache
+│    │    │    └─ Evictions low but heap still high → data or fieldCache is large
+│    │    │         Fix: increase JVM -Xmx (SOLR_JAVA_MEM in Solr's environment config)
 │    │    │              or add more RAM to the host
 │    │    │
-│    │    └─ Heap high AND evictions low → not a cache problem
-│    │         Consider: index warming, Solr fieldCache for sorted fields
+│    │    └─ Heap high AND evictions low → not a cache-size problem
+│    │         Consider: Solr fieldCache warming on startup; large stored fields
 │    │
-│    └─ <50% → NOT a memory issue → continue
+│    └─ <0.50 → NOT a memory issue → continue
 │
-├─ Step 3: Check os.process_cpu_load in /status (requires 2a above)
+├─ Step 4: Check os.process_cpu_load in /status
 │    │
-│    ├─ >0.8 → CPU SATURATION
+│    ├─ >0.80 → CPU SATURATION
 │    │    │
 │    │    ├─ Check segmentCount in /status
 │    │    │    ├─ >20 → run Solr optimize to merge segments
 │    │    │    │    POST http://solr-host:8983/solr/name_lookup/update?optimize=true
-│    │    │    └─ Low segmentCount → CPU is busy with query evaluation
+│    │    │    └─ Low segmentCount → CPU is busy with query evaluation itself
 │    │    │
-│    │    ├─ Check slow-query WARNINGs in logs (requires 2d above)
-│    │    │    Are expensive queries (many filters, wildcard-heavy) driving the load?
-│    │    │    Fix: cache common filter combinations; avoid leading wildcards in queries
+│    │    ├─ Check SLOW QUERY WARNINGs in logs
+│    │    │    Are specific queries (many filters, wildcard-heavy) driving the load?
+│    │    │    Fix: cache common filter combinations; avoid leading wildcards
 │    │    │
 │    │    └─ Even load across all queries → scale horizontally (add Solr replicas)
 │    │
-│    └─ Low CPU and low memory with slow queries → likely GC pauses → continue
+│    └─ Low CPU and low memory but slow queries → likely JVM GC pauses → continue
 │
-└─ Step 4: Check p99 vs p50 (requires 2c above)
+└─ Step 5: Check p99 vs p50 in recent_queries
      │
      ├─ p99 >> p50 (e.g. p50=50ms, p99=5000ms) → GC pause signature
-     │    Fix: tune JVM GC settings
-     │         -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:G1HeapRegionSize=...
-     │         Check Solr GC logs (solr-gc.log) for Full GC frequency
+     │    Fix: tune JVM GC settings in Solr's JVM config:
+     │         -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+     │         Check Solr GC logs (solr-gc.log) for Full GC frequency and duration
      │
-     └─ p50 and p99 both high → Solr is overloaded at all percentiles
-          → All of the above apply; start with memory (Step 2)
+     └─ p50 and p99 both high → sustained overload at all percentiles
+          → All of the above apply; start with memory (Step 3)
 ```
 
 ---
 
-## 4. Quick reference: environment variables
+## 4. Environment variables
 
 | Variable | Default | Effect |
 |---|---|---|
 | `SOLR_HOST` | `localhost` | Solr hostname |
 | `SOLR_PORT` | `8983` | Solr port |
-| `RECENT_TIMES_COUNT` | `1000` | How many recent query times to track |
-| `SLOW_QUERY_THRESHOLD_MS` | `500` | Log a WARNING for queries slower than this (requires code change 2d) |
-| `LOGLEVEL` | `INFO` | Set to `DEBUG` to log full Solr request/response JSON |
+| `RECENT_TIMES_COUNT` | `1000` | How many recent query durations to track (affects latency percentiles) |
+| `RECENT_QUERY_TIMESTAMPS_COUNT` | `50000` | How many query timestamps to retain for rate estimation. At 500 qps this covers ~100 seconds; lower to reduce memory use on low-traffic instances. |
+| `SLOW_QUERY_THRESHOLD_MS` | `500` | Queries slower than this are logged at WARNING level |
+| `LOGLEVEL` | `INFO` | Set to `DEBUG` to log full Solr request/response JSON for every query |
