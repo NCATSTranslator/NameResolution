@@ -9,15 +9,14 @@ high query rate, and other causes.
 
 ## 1. `/status` response fields
 
-### Index health
+The response has two main diagnostic sections: `recent_queries` (Python frontend metrics)
+and `solr` (everything from the Solr database itself).
 
-| Field | What it means |
-|---|---|
-| `segmentCount` | Number of Lucene segments. Above ~20 means Solr does more per-segment work per query. Consider triggering an optimize (`POST /solr/name_lookup/update?optimize=true`). |
-| `numDocs` / `maxDoc` | `maxDoc - numDocs` = soft-deleted docs not yet merged. High deleted count + high segment count amplifies query cost. |
-| `size` | Index size on disk. Unexpectedly small may indicate an incomplete data load. |
+### Frontend query metrics (`recent_queries`)
 
-### Query latency (`recent_queries`)
+These are tracked by the Python process and reflect the full round-trip time seen by callers.
+
+#### Latency
 
 | Field | What it means |
 |---|---|
@@ -25,7 +24,7 @@ high query rate, and other causes.
 | `p50_ms` / `p95_ms` / `p99_ms` | Latency percentiles over the same window. p50 rising = every query is slow. p99 spiking but p50 stable = occasional GC pauses or one-off expensive queries. |
 | `recent_times_ms` | The raw list. Useful for spotting bimodal distributions (fast + slow clusters). |
 
-### Query rate (`recent_queries.rate`)
+#### Rate (`recent_queries.rate`)
 
 Computed from a separate timestamp deque (up to `RECENT_QUERY_TIMESTAMPS_COUNT` entries,
 default 50,000) that records the start time of every query. The large size ensures rate
@@ -41,25 +40,36 @@ estimates remain accurate even at high query rates (e.g., 500 qps fills 1000 ent
 
 The key diagnostic use: **if Solr is slow AND the query rate is high**, the cause is likely
 load rather than an internal Solr problem. If the rate is normal but Solr is slow, look at
-JVM/OS metrics.
+the `solr` fields below.
 
-### JVM and OS (`jvm`, `os`)
+### Solr database metrics (`solr`)
 
-Fetched in parallel from Solr's `/solr/admin/info/system` endpoint.
+All fields under `solr` come from Solr admin endpoints fetched in parallel when `/status`
+is called. They are `null` if the relevant Solr endpoint is unreachable (a warning is logged).
+
+#### Index health
 
 | Field | What it means |
 |---|---|
-| `jvm.heap_used_pct` | Fraction of JVM heap in use (0.0–1.0). **>0.80 = memory pressure.** |
-| `jvm.heap_used_bytes` / `jvm.heap_max_bytes` | Absolute heap figures. Max is set by `-Xmx` in Solr's JVM config. |
-| `os.process_cpu_load` | Solr process CPU (0.0–1.0). **>0.80 = CPU saturation.** |
-| `os.system_cpu_load` | Host-wide CPU. If higher than process load, other processes are competing. |
-| `os.free_physical_memory_bytes` | OS RAM available. If low, the OS may be swapping. |
+| `solr.segmentCount` | Number of Lucene segments. Above ~20 means Solr does more per-segment work per query. Consider triggering an optimize (`POST /solr/name_lookup/update?optimize=true`). |
+| `solr.numDocs` / `solr.maxDoc` | `maxDoc - numDocs` = soft-deleted docs not yet merged. High deleted count + high segment count amplifies query cost. |
+| `solr.size` | Index size on disk. Unexpectedly small may indicate an incomplete data load. |
 
-These fields are `null` if the Solr admin endpoint is unreachable (a warning is logged).
+#### JVM and OS (`solr.jvm`, `solr.os`)
 
-### Cache statistics (`cache`)
+Fetched from Solr's `/solr/admin/info/system` endpoint.
 
-Fetched in parallel from Solr's MBeans endpoint. Reports `filterCache` and `queryResultCache`.
+| Field | What it means |
+|---|---|
+| `solr.jvm.heap_used_pct` | Fraction of JVM heap in use (0.0–1.0). **>0.80 = memory pressure.** |
+| `solr.jvm.heap_used_bytes` / `solr.jvm.heap_max_bytes` | Absolute heap figures. Max is set by `-Xmx` in Solr's JVM config. |
+| `solr.os.process_cpu_load` | Solr process CPU (0.0–1.0). **>0.80 = CPU saturation.** |
+| `solr.os.system_cpu_load` | Host-wide CPU. If higher than process load, other processes are competing. |
+| `solr.os.free_physical_memory_bytes` | OS RAM available. If low, the OS may be swapping. |
+
+#### Cache statistics (`solr.cache`)
+
+Fetched from Solr's MBeans endpoint. Reports `filterCache` and `queryResultCache`.
 
 | Field | What it means |
 |---|---|
@@ -120,11 +130,11 @@ Solr seems slow or the service is unresponsive
 │    │
 │    └─ "waiting for Solr" is most of total → problem is INSIDE Solr → continue
 │
-├─ Step 3: Check jvm.heap_used_pct in /status
+├─ Step 3: Check solr.jvm.heap_used_pct in /status
 │    │
 │    ├─ >0.80 → MEMORY PRESSURE
 │    │    │
-│    │    ├─ Check cache.filterCache.evictions
+│    │    ├─ Check solr.cache.filterCache.evictions
 │    │    │    ├─ Rising evictions → cache is too small for the working set
 │    │    │    │    Fix: increase <maxSize> in solrconfig.xml for filterCache
 │    │    │    └─ Evictions low but heap still high → data or fieldCache is large
@@ -136,11 +146,11 @@ Solr seems slow or the service is unresponsive
 │    │
 │    └─ <0.50 → NOT a memory issue → continue
 │
-├─ Step 4: Check os.process_cpu_load in /status
+├─ Step 4: Check solr.os.process_cpu_load in /status
 │    │
 │    ├─ >0.80 → CPU SATURATION
 │    │    │
-│    │    ├─ Check segmentCount in /status
+│    │    ├─ Check solr.segmentCount in /status
 │    │    │    ├─ >20 → run Solr optimize to merge segments
 │    │    │    │    POST http://solr-host:8983/solr/name_lookup/update?optimize=true
 │    │    │    └─ Low segmentCount → CPU is busy with query evaluation itself

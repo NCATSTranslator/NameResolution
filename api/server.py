@@ -220,18 +220,20 @@ async def status() -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
-            'startTime': core['startTime'],
-            'numDocs': index.get('numDocs', ''),
-            'maxDoc': index.get('maxDoc', ''),
-            'deletedDocs': index.get('deletedDocs', ''),
-            'version': index.get('version', ''),
-            'segmentCount': index.get('segmentCount', ''),
-            'lastModified': index.get('lastModified', ''),
-            'size': index.get('size', ''),
             'recent_queries': recent_queries,
-            'jvm': jvm_info,
-            'os': os_info,
-            'cache': cache_info,
+            'solr': {
+                'startTime': core['startTime'],
+                'numDocs': index.get('numDocs', ''),
+                'maxDoc': index.get('maxDoc', ''),
+                'deletedDocs': index.get('deletedDocs', ''),
+                'version': index.get('version', ''),
+                'segmentCount': index.get('segmentCount', ''),
+                'lastModified': index.get('lastModified', ''),
+                'size': index.get('size', ''),
+                'jvm': jvm_info,
+                'os': os_info,
+                'cache': cache_info,
+            },
         }
     else:
         return {
@@ -245,8 +247,10 @@ async def status() -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
-            'jvm': jvm_info,
-            'os': os_info,
+            'solr': {
+                'jvm': jvm_info,
+                'os': os_info,
+            },
         }
 
 
