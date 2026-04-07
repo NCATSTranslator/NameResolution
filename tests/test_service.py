@@ -260,3 +260,43 @@ def test_only_taxa_queries():
     results_ftd_disease_with_only_taxon = response.json()
     assert len(results_ftd_disease_with_only_taxon) == 1
     assert results_ftd_disease_with_only_taxon[0]['curie'] == 'MONDO:0010857'
+
+
+def test_status_shape():
+    """Verify /status returns expected fields including recent_queries and solr_metrics."""
+    client = TestClient(app)
+    response = client.get("/status")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data['status'] == 'ok'
+    assert 'numDocs' in data
+
+    # recent_queries should always be present; count/means are None before any queries.
+    rq = data['recent_queries']
+    assert 'count' in rq
+    assert 'mean_time_ms' in rq
+    assert 'mean_solr_time_ms' in rq
+
+    # solr_metrics may be None if Solr's metrics API is unavailable, but if present
+    # it must contain the expected structure.
+    assert 'solr_metrics' in data
+    if data['solr_metrics'] is not None:
+        sm = data['solr_metrics']
+        assert 'query_handler' in sm
+        assert 'cache' in sm
+        assert 'jvm' in sm
+        assert 'requests' in sm['query_handler']
+        assert 'hitratio' in sm['cache']
+        assert 'heap_used_pct' in sm['jvm']
+
+
+def test_status_recent_queries_populated():
+    """After a lookup, recent_queries should reflect at least one recorded time."""
+    client = TestClient(app)
+    client.get("/lookup", params={'string': 'alzheimer'})
+    response = client.get("/status")
+    data = response.json()
+    assert data['recent_queries']['count'] >= 1
+    assert data['recent_queries']['mean_time_ms'] is not None
+    assert data['recent_queries']['mean_solr_time_ms'] is not None

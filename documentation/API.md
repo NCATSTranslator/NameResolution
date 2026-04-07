@@ -333,6 +333,37 @@ Solr database.
   "version": 34838,
   "segmentCount": 57,
   "lastModified": "2025-09-24T19:09:56.524Z",
-  "size": "142.17 GB"
+  "size": "142.17 GB",
+  "recent_queries": {
+    "count": 1000,
+    "mean_time_ms": 42.3,
+    "mean_solr_time_ms": 38.1
+  },
+  "solr_metrics": {
+    "query_handler": {
+      "requests": 9842301,
+      "errors": 0,
+      "timeouts": 0,
+      "mean_ms": 41.2,
+      "p75_ms": 55.0,
+      "p95_ms": 120.3,
+      "p99_ms": 340.7
+    },
+    "cache": {
+      "hitratio": 0.91,
+      "evictions": 1240,
+      "size": 512
+    },
+    "jvm": {
+      "heap_used_mb": 4096.0,
+      "heap_max_mb": 8192.0,
+      "heap_used_pct": 50.0,
+      "cpu_load": 0.12
+    }
+  }
 }
 ```
+
+`recent_queries` tracks the last 1000 `/lookup` queries handled by this NameRes instance (configurable via the `RECENT_TIMES_COUNT` environment variable). `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. Both fields are `null` if no queries have been handled since startup.
+
+`solr_metrics` is populated directly from Solr's `/admin/metrics` API and provides native Solr health indicators: cumulative query handler statistics (useful for detecting errors or timeouts), queryResultCache hit ratio (a low ratio indicates memory pressure or cache thrashing), and JVM heap/CPU metrics. This field is `null` if the Solr metrics API is unavailable.

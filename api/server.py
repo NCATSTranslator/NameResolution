@@ -69,32 +69,30 @@ async def status() -> Dict:
         response = await client.get(query_url, params={
             'action': 'STATUS'
         })
+        if response.status_code >= 300:
+            logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
+            response.raise_for_status()
 
         # Fetch Solr query handler, cache, and JVM metrics for strain detection.
+        # A single call with group=core&group=jvm retrieves both in one round-trip.
+        SOLR_CORE_NAME = 'name_lookup_shard1_replica_n1'
         solr_metrics = None
         try:
-            core_metrics_resp = await client.get(metrics_url, params={
-                'group': 'core',
-                'prefix': 'QUERY./select,CACHE.core.queryResultCache',
-                'wt': 'json',
-            })
-            jvm_metrics_resp = await client.get(metrics_url, params={
-                'group': 'jvm',
-                'prefix': 'memory.heap,os.processCpuLoad',
-                'wt': 'json',
-            })
-            if core_metrics_resp.status_code < 300 and jvm_metrics_resp.status_code < 300:
-                cm = core_metrics_resp.json().get('metrics', {})
-                jm = jvm_metrics_resp.json().get('metrics', {})
+            metrics_resp = await client.get(metrics_url, params=[
+                ('group', 'core'),
+                ('group', 'jvm'),
+                ('prefix', 'QUERY./select,CACHE.core.queryResultCache'),
+                ('prefix', 'memory.heap,os.processCpuLoad'),
+                ('wt', 'json'),
+            ])
+            if metrics_resp.status_code < 300:
+                all_metrics = metrics_resp.json().get('metrics', {})
 
-                # Core metrics are keyed by "solr.core.<corename>:<metric>"
-                core_key = next((k for k in cm if k.startswith('solr.core.')), None)
-                core_data = cm.get(core_key, {}) if core_key else {}
-
+                core_data = all_metrics.get(f'solr.core.{SOLR_CORE_NAME}', {})
                 qh = core_data.get('QUERY./select.requestTimes', {})
                 cache = core_data.get('CACHE.core.queryResultCache', {})
-                heap = jm.get('solr.jvm', {}).get('memory.heap', {})
-                cpu = jm.get('solr.jvm', {}).get('os.processCpuLoad', None)
+                heap = all_metrics.get('solr.jvm', {}).get('memory.heap', {})
+                cpu = all_metrics.get('solr.jvm', {}).get('os.processCpuLoad', None)
 
                 solr_metrics = {
                     'query_handler': {
@@ -120,9 +118,7 @@ async def status() -> Dict:
                 }
         except Exception:
             logger.warning("Failed to retrieve Solr metrics for /status", exc_info=True)
-    if response.status_code >= 300:
-        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
-        response.raise_for_status()
+
     result = response.json()
 
     # Do we know the Babel version and version URL? It will be stored in an environmental variable if we do.
