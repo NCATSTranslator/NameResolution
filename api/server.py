@@ -37,8 +37,9 @@ app.add_middleware(
 )
 
 # We track the time taken for each Solr query for the last 1000 queries so we can track performance via /status.
-RECENT_TIMES_COUNT = os.getenv("RECENT_TIMES_COUNT", 1000)
+RECENT_TIMES_COUNT = int(os.getenv("RECENT_TIMES_COUNT", 1000))
 recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
+recent_solr_times = deque(maxlen=RECENT_TIMES_COUNT)
 
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
@@ -63,10 +64,62 @@ async def status_get() -> Dict:
 async def status() -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
+    metrics_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/metrics"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.get(query_url, params={
             'action': 'STATUS'
         })
+
+        # Fetch Solr query handler, cache, and JVM metrics for strain detection.
+        solr_metrics = None
+        try:
+            core_metrics_resp = await client.get(metrics_url, params={
+                'group': 'core',
+                'prefix': 'QUERY./select,CACHE.core.queryResultCache',
+                'wt': 'json',
+            })
+            jvm_metrics_resp = await client.get(metrics_url, params={
+                'group': 'jvm',
+                'prefix': 'memory.heap,os.processCpuLoad',
+                'wt': 'json',
+            })
+            if core_metrics_resp.status_code < 300 and jvm_metrics_resp.status_code < 300:
+                cm = core_metrics_resp.json().get('metrics', {})
+                jm = jvm_metrics_resp.json().get('metrics', {})
+
+                # Core metrics are keyed by "solr.core.<corename>:<metric>"
+                core_key = next((k for k in cm if k.startswith('solr.core.')), None)
+                core_data = cm.get(core_key, {}) if core_key else {}
+
+                qh = core_data.get('QUERY./select.requestTimes', {})
+                cache = core_data.get('CACHE.core.queryResultCache', {})
+                heap = jm.get('solr.jvm', {}).get('memory.heap', {})
+                cpu = jm.get('solr.jvm', {}).get('os.processCpuLoad', None)
+
+                solr_metrics = {
+                    'query_handler': {
+                        'requests': core_data.get('QUERY./select.requests'),
+                        'errors': core_data.get('QUERY./select.errors'),
+                        'timeouts': core_data.get('QUERY./select.timeouts'),
+                        'mean_ms': qh.get('mean_ms'),
+                        'p75_ms': qh.get('p75_ms'),
+                        'p95_ms': qh.get('p95_ms'),
+                        'p99_ms': qh.get('p99_ms'),
+                    },
+                    'cache': {
+                        'hitratio': cache.get('hitratio'),
+                        'evictions': cache.get('evictions'),
+                        'size': cache.get('size'),
+                    },
+                    'jvm': {
+                        'heap_used_mb': round(heap.get('used', 0) / 1_048_576, 1) if 'used' in heap else None,
+                        'heap_max_mb': round(heap.get('max', 0) / 1_048_576, 1) if 'max' in heap else None,
+                        'heap_used_pct': round(heap.get('used', 0) / heap['max'] * 100, 1) if heap.get('max') else None,
+                        'cpu_load': cpu,
+                    },
+                }
+        except Exception:
+            logger.warning("Failed to retrieve Solr metrics for /status", exc_info=True)
     if response.status_code >= 300:
         logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
         response.raise_for_status()
@@ -117,9 +170,10 @@ async def status() -> Dict:
             'size': index.get('size', ''),
             'recent_queries': {
                 'count': len(recent_query_times),
-                'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else -1,
-                'recent_times_ms': list(recent_query_times),
-            }
+                'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
+                'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
+            },
+            'solr_metrics': solr_metrics,
         }
     else:
         return {
@@ -618,6 +672,7 @@ async def lookup(string: str,
     time_taken_ms = (time_end - time_start)/1_000_000
     time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
     recent_query_times.append(time_taken_ms)
+    recent_solr_times.append(time_taken_ms_solr)
     logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
                  f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
                  f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms waiting for Solr)"
