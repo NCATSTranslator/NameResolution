@@ -22,7 +22,7 @@ import httpx
 from pydantic import BaseModel, conint, Field
 from starlette.middleware.cors import CORSMiddleware
 
-from api.apidocs import get_app_info, construct_open_api_schema
+from .apidocs import get_app_info, construct_open_api_schema
 
 SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
 SOLR_PORT = os.getenv("SOLR_PORT", "8983")
