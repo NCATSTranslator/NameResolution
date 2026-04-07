@@ -83,8 +83,10 @@ async def status(include_metrics: bool = False) -> Dict:
                 metrics_resp = await client.get(metrics_url, params=[
                     ('group', 'core'),
                     ('group', 'jvm'),
-                    ('prefix', 'QUERY./select,CACHE.core.queryResultCache'),
-                    ('prefix', 'memory.heap,os.processCpuLoad'),
+                    ('prefix', 'QUERY./select'),
+                    ('prefix', 'CACHE.core.queryResultCache'),
+                    ('prefix', 'memory.heap'),
+                    ('prefix', 'os.processCpuLoad'),
                     ('wt', 'json'),
                 ])
                 if metrics_resp.status_code < 300:
