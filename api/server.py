@@ -178,7 +178,7 @@ async def status(include_metrics: bool = False) -> Dict:
                 'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
                 'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
             },
-            solr_metrics: solr_metrics,
+            'solr_metrics': solr_metrics,
         }
     else:
         return {
@@ -192,7 +192,7 @@ async def status(include_metrics: bool = False) -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
-            solr_metrics: solr_metrics,
+            'solr_metrics': solr_metrics,
         }
 
 
