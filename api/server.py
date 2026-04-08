@@ -134,11 +134,18 @@ async def status() -> Dict:
             "heap_used_pct": round(heap_used / heap_max, 4) if heap_used and heap_max else None,
         }
         system = sysinfo_data.get("system", {})
+        free_mem = system.get("freePhysicalMemorySize")
+        total_mem = system.get("totalPhysicalMemorySize")
+        if free_mem is not None and total_mem and total_mem > 0 and 0 <= free_mem <= total_mem:
+            physical_memory_used_pct = round((total_mem - free_mem) / total_mem, 4)
+        else:
+            physical_memory_used_pct = None
         os_info = {
             "process_cpu_load": system.get("processCpuLoad"),
             "system_cpu_load": system.get("systemCpuLoad"),
-            "free_physical_memory_bytes": system.get("freePhysicalMemorySize"),
-            "total_physical_memory_bytes": system.get("totalPhysicalMemorySize"),
+            "free_physical_memory_bytes": free_mem,
+            "total_physical_memory_bytes": total_mem,
+            "physical_memory_used_pct": physical_memory_used_pct,
         }
 
     # Build cache stats from the MBeans response.
