@@ -66,7 +66,17 @@ async def docs_redirect():
          description="This endpoint will return status information and a list of counts from the underlying Solr "
                      "instance for this NameRes instance."
          )
-async def status_get(full: bool = False) -> Dict:
+async def status_get(
+    full: bool = Query(
+        False,
+        description=(
+            "When false (default), only the Solr cores endpoint is called, returning basic index stats "
+            "(numDocs, startTime, etc.) with jvm, os, and cache as null. "
+            "Set to true to also fetch JVM memory, OS metrics, and cache statistics — "
+            "useful for diagnostics but should not be used for frequent liveness probes."
+        ),
+    )
+) -> Dict:
     """ Return status and count information from the underyling Solr instance. """
     return await status(full=full)
 
