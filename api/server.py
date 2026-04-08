@@ -50,6 +50,8 @@ query_log: deque = deque(maxlen=QUERY_LOG_SIZE)
 
 # Queries slower than this threshold will be logged at WARNING level (see documentation/Performance.md).
 SLOW_QUERY_THRESHOLD_MS = float(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
+IDEAL_QUERY_THRESHOLD_MS = 100    # below this: "ideal"
+VERY_SLOW_QUERY_THRESHOLD_MS = 1000  # at or above this: "very slow"
 
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
@@ -130,13 +132,18 @@ async def status(full: bool = False) -> Dict:
         }
 
     # Latency buckets: fraction of queries in each performance tier.
-    # Boundaries: ideal < 100ms, fine < SLOW_QUERY_THRESHOLD_MS, slow < 1000ms, very_slow >= 1000ms.
     total = len(durations)
     if total:
-        n_ideal     = sum(1 for d in durations if d < 100)
-        n_fine      = sum(1 for d in durations if 100 <= d < SLOW_QUERY_THRESHOLD_MS)
-        n_slow      = sum(1 for d in durations if SLOW_QUERY_THRESHOLD_MS <= d < 1000)
-        n_very_slow = sum(1 for d in durations if d >= 1000)
+        n_ideal = n_fine = n_slow = n_very_slow = 0
+        for d in durations:
+            if d < IDEAL_QUERY_THRESHOLD_MS:
+                n_ideal += 1
+            elif d < SLOW_QUERY_THRESHOLD_MS:
+                n_fine += 1
+            elif d < VERY_SLOW_QUERY_THRESHOLD_MS:
+                n_slow += 1
+            else:
+                n_very_slow += 1
         latency_buckets = {
             'slow_threshold_ms': SLOW_QUERY_THRESHOLD_MS,
             'ideal_pct':     round(n_ideal     / total, 4),
