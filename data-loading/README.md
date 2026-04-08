@@ -58,7 +58,7 @@ automatically. This is a seven-step process:
    Note the double-quotes: setup-and-load-solr.sh requires a glob pattern as its first argument, not a list of files to process!
 
 5. Generate a backup of the Solr instance. The first command will create a directory at
-   `solrdata/data/name_lookup_shard1_repical_n1/data/snapshot.backup` -- you can track its progress by comparing the
+   `solrdata/data/name_lookup_shard1_replica_n1/data/snapshot.backup` -- you can track its progress by comparing the
    number of files in that directory to the number of files in `../data/index` (as I write this, it has 513 files).
 
    ```shell

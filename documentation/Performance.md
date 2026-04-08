@@ -80,7 +80,9 @@ Fetched from Solr's MBeans endpoint. Reports `filterCache` and `queryResultCache
 |---|---|
 | `hitratio` | Fraction of cache lookups that were hits. Should be >0.90. Below 0.50 = Solr is re-computing filters on nearly every query. |
 | `evictions` | Rising count = cache too small for the working set (a symptom of memory pressure). |
-| `size` / `maxSize` | Current entries vs. configured maximum. If `size ≈ maxSize`, the cache is full and evictions are likely. |
+| `size` | Current number of entries in the cache. If evictions are rising, the working set is larger than the cache. |
+| `lookups` | Total cache lookups. |
+| `hits` | Cache lookups that were served from cache (rather than recomputed). |
 
 Cache sizes are configured in Solr's `solrconfig.xml`. If evictions are high, increase
 `<maxSize>` for the affected cache — or investigate whether requests use many distinct
