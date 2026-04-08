@@ -7,7 +7,6 @@
   * The curie with the shortest match is first, etc.
   * Matching names are returned first, followed by non-matching names
 """
-import asyncio
 import json
 import logging
 import statistics
@@ -25,9 +24,12 @@ from pydantic import BaseModel, conint, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from .apidocs import get_app_info, construct_open_api_schema
+from .solr import SolrClient
 
 SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
 SOLR_PORT = os.getenv("SOLR_PORT", "8983")
+
+solr_client = SolrClient(SOLR_HOST, int(SOLR_PORT))
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
@@ -71,39 +73,7 @@ async def status_get() -> Dict:
 
 async def status() -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
-    cores_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
-    sysinfo_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/info/system"
-    mbeans_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/admin/mbeans"
-
-    async def fetch_sysinfo(client):
-        try:
-            r = await client.get(sysinfo_url, params={"wt": "json"})
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            logger.warning("Could not fetch Solr system info: %s", e)
-            return None
-
-    async def fetch_cache_mbeans(client):
-        try:
-            r = await client.get(mbeans_url, params={"cat": "CACHE", "stats": "true", "wt": "json"})
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            logger.warning("Could not fetch Solr cache MBeans: %s", e)
-            return None
-
-    async with httpx.AsyncClient(timeout=None) as client:
-        cores_response, sysinfo_data, mbeans_data = await asyncio.gather(
-            client.get(cores_url, params={"action": "STATUS"}),
-            fetch_sysinfo(client),
-            fetch_cache_mbeans(client),
-        )
-
-    if cores_response.status_code >= 300:
-        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", cores_response.text)
-        cores_response.raise_for_status()
-    result = cores_response.json()
+    solr = await solr_client.fetch_status()
 
     # Do we know the Babel version and version URL? It will be stored in an environmental variable if we do.
     babel_version = os.environ.get("BABEL_VERSION", "unknown")
@@ -120,52 +90,6 @@ async def status() -> Dict:
     app_info = get_app_info()
     if 'version' in app_info and app_info['version']:
         nameres_version = 'v' + app_info['version']
-
-    # Build JVM and OS info from the system info response.
-    jvm_info = None
-    os_info = None
-    if sysinfo_data:
-        jvm_raw = sysinfo_data.get("jvm", {}).get("memory", {}).get("raw", {})
-        heap_used = jvm_raw.get("used")
-        heap_max = jvm_raw.get("max")
-        jvm_info = {
-            "heap_used_bytes": heap_used,
-            "heap_max_bytes": heap_max,
-            "heap_used_pct": round(heap_used / heap_max, 4) if heap_used and heap_max else None,
-        }
-        system = sysinfo_data.get("system", {})
-        free_mem = system.get("freePhysicalMemorySize")
-        total_mem = system.get("totalPhysicalMemorySize")
-        if free_mem is not None and total_mem and total_mem > 0 and 0 <= free_mem <= total_mem:
-            physical_memory_used_pct = round((total_mem - free_mem) / total_mem, 4)
-        else:
-            physical_memory_used_pct = None
-        os_info = {
-            "process_cpu_load": system.get("processCpuLoad"),
-            "system_cpu_load": system.get("systemCpuLoad"),
-            "free_physical_memory_bytes": free_mem,
-            "total_physical_memory_bytes": total_mem,
-            "physical_memory_used_pct": physical_memory_used_pct,
-        }
-
-    # Build cache stats from the MBeans response.
-    cache_info = None
-    if mbeans_data:
-        def extract_cache(name):
-            for entry in mbeans_data.get("solr-mbeans", []):
-                if isinstance(entry, dict) and name in entry:
-                    stats = entry[name].get("stats", {})
-                    return {
-                        "hitratio": stats.get("hitratio"),
-                        "evictions": stats.get("evictions"),
-                        "size": stats.get("size"),
-                        "maxSize": stats.get("maxSize"),
-                    }
-            return None
-        cache_info = {
-            "filterCache": extract_cache("filterCache"),
-            "queryResultCache": extract_cache("queryResultCache"),
-        }
 
     # Unpack query_log into parallel lists for latency and rate computations.
     log_snapshot = list(query_log)  # snapshot to avoid mutation during computation
@@ -232,39 +156,23 @@ async def status() -> Dict:
         },
     }
 
-    # We should have a status for name_lookup_shard1_replica_n1.
-    if 'status' in result and 'name_lookup_shard1_replica_n1' in result['status']:
-        core = result['status']['name_lookup_shard1_replica_n1']
+    biolink_model = {
+        'tag': biolink_model_tag,
+        'url': biolink_model_url,
+        'download_url': biolink_model_download_url,
+    }
 
-        index = {}
-        if 'index' in core:
-            index = core['index']
-
+    if solr['found']:
+        solr_dict = {k: v for k, v in solr.items() if k != 'found'}
         return {
             'status': 'ok',
             'message': 'Reporting results from primary core.',
             'babel_version': babel_version,
             'babel_version_url': babel_version_url,
-            'biolink_model': {
-                'tag': biolink_model_tag,
-                'url': biolink_model_url,
-                'download_url': biolink_model_download_url,
-            },
+            'biolink_model': biolink_model,
             'nameres_version': nameres_version,
             'recent_queries': recent_queries,
-            'solr': {
-                'startTime': core['startTime'],
-                'numDocs': index.get('numDocs', ''),
-                'maxDoc': index.get('maxDoc', ''),
-                'deletedDocs': index.get('deletedDocs', ''),
-                'version': index.get('version', ''),
-                'segmentCount': index.get('segmentCount', ''),
-                'lastModified': index.get('lastModified', ''),
-                'size': index.get('size', ''),
-                'jvm': jvm_info,
-                'os': os_info,
-                'cache': cache_info,
-            },
+            'solr': solr_dict,
         }
     else:
         return {
@@ -272,15 +180,11 @@ async def status() -> Dict:
             'message': 'Expected core not found.',
             'babel_version': babel_version,
             'babel_version_url': babel_version_url,
-            'biolink_model': {
-                'tag': biolink_model_tag,
-                'url': biolink_model_url,
-                'download_url': biolink_model_download_url,
-            },
+            'biolink_model': biolink_model,
             'nameres_version': nameres_version,
             'solr': {
-                'jvm': jvm_info,
-                'os': os_info,
+                'jvm': solr['jvm'],
+                'os': solr['os'],
             },
         }
 
