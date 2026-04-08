@@ -133,8 +133,13 @@ class SolrClient:
     # High-level: fetch everything and return a parsed snapshot           #
     # ------------------------------------------------------------------ #
 
-    async def fetch_status(self) -> dict:
-        """Fetch and parse all Solr monitoring data concurrently.
+    async def fetch_status(self, full: bool = False) -> dict:
+        """Fetch and parse Solr monitoring data.
+
+        When ``full=False`` (default), only the cores endpoint is called,
+        returning basic index stats with ``jvm``, ``os``, and ``cache`` as
+        ``None``.  Pass ``full=True`` to also fetch JVM, OS, and cache metrics
+        (three concurrent requests instead of one).
 
         Returns a dict with a ``found`` flag plus parsed fields.  Callers
         should check ``result["found"]`` before accessing index-level keys.
@@ -142,11 +147,15 @@ class SolrClient:
         Raises ``httpx.HTTPStatusError`` if the cores endpoint is unavailable.
         """
         async with httpx.AsyncClient(timeout=None) as client:
-            cores_data, sysinfo_data, mbeans_data = await asyncio.gather(
-                self.fetch_cores(client),
-                self.fetch_sysinfo(client),
-                self.fetch_mbeans(client),
-            )
+            if full:
+                cores_data, sysinfo_data, mbeans_data = await asyncio.gather(
+                    self.fetch_cores(client),
+                    self.fetch_sysinfo(client),
+                    self.fetch_mbeans(client),
+                )
+            else:
+                cores_data = await self.fetch_cores(client)
+                sysinfo_data = mbeans_data = None
 
         jvm_info   = self.parse_jvm(sysinfo_data)   if sysinfo_data else None
         os_info    = self.parse_os(sysinfo_data)    if sysinfo_data else None

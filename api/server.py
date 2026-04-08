@@ -66,14 +66,14 @@ async def docs_redirect():
          description="This endpoint will return status information and a list of counts from the underlying Solr "
                      "instance for this NameRes instance."
          )
-async def status_get() -> Dict:
+async def status_get(full: bool = False) -> Dict:
     """ Return status and count information from the underyling Solr instance. """
-    return await status()
+    return await status(full=full)
 
 
-async def status() -> Dict:
+async def status(full: bool = False) -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
-    solr = await solr_client.fetch_status()
+    solr = await solr_client.fetch_status(full=full)
 
     # Do we know the Babel version and version URL? It will be stored in an environmental variable if we do.
     babel_version = os.environ.get("BABEL_VERSION", "unknown")
@@ -90,7 +90,6 @@ async def status() -> Dict:
     app_info = get_app_info()
     if 'version' in app_info and app_info['version']:
         nameres_version = 'v' + app_info['version']
-
     # Unpack query_log into parallel lists for latency and rate computations.
     log_snapshot = list(query_log)  # snapshot to avoid mutation during computation
     # Sort by timestamp: concurrent requests complete in a different order than they started,
@@ -311,7 +310,7 @@ async def curie_lookup(curies) -> Dict[str, Dict]:
     time_end = time.time_ns()
 
     logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)} took {(time_end - time_start)/1_000_000:.2f}ms")
-    
+
     return output
 
 class LookupResult(BaseModel):
