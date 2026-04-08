@@ -723,7 +723,7 @@ if os.environ.get('OTEL_ENABLED', 'false') == 'true':
     # these supresses such warnings.
     logging.captureWarnings(capture=True)
     warnings.filterwarnings("ignore", category=ResourceWarning)
-    otel_service_name = os.environ.get('SERVER_NAME', 'infores:sri-node-normalizer')
+    otel_service_name = os.environ.get('SERVER_NAME', 'infores:sri-name-resolver')
     assert otel_service_name and isinstance(otel_service_name, str)
 
     otlp_host = os.environ.get("JAEGER_HOST", "http://localhost/").rstrip('/')
