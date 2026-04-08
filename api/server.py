@@ -8,9 +8,13 @@
   * Matching names are returned first, followed by non-matching names
 """
 import json
-import logging, warnings
+import logging
+import statistics
+import time
+import warnings
 import os
 import re
+from collections import deque
 from typing import Dict, List, Union, Annotated, Optional
 
 from fastapi import Body, FastAPI, Query
@@ -20,12 +24,16 @@ from pydantic import BaseModel, conint, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from .apidocs import get_app_info, construct_open_api_schema
+from .solr import SolrClient
 
-LOGGER = logging.getLogger(__name__)
 SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
 SOLR_PORT = os.getenv("SOLR_PORT", "8983")
 
+solr_client = SolrClient(SOLR_HOST, int(SOLR_PORT))
+
 app = FastAPI(**get_app_info())
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=os.getenv("LOGLEVEL", logging.INFO))
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +42,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# We track (timestamp_s, duration_ms) for recent queries to compute both latency and rate stats.
+# A large default covers ~100s at 500 qps, giving meaningful rate windows even under heavy load.
+QUERY_LOG_SIZE = int(os.getenv("QUERY_LOG_SIZE", 50000))
+query_log: deque = deque(maxlen=QUERY_LOG_SIZE)
+
+# Queries slower than this threshold will be logged at WARNING level (see documentation/Performance.md).
+SLOW_QUERY_THRESHOLD_MS = float(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
+IDEAL_QUERY_THRESHOLD_MS = 100    # below this: "ideal"
+VERY_SLOW_QUERY_THRESHOLD_MS = 1000  # at or above this: "very slow"
 
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
@@ -50,53 +68,159 @@ async def docs_redirect():
          description="This endpoint will return status information and a list of counts from the underlying Solr "
                      "instance for this NameRes instance."
          )
-async def status_get() -> Dict:
+async def status_get(
+    full: bool = Query(
+        False,
+        description=(
+            "When false (default), only the Solr cores endpoint is called, returning basic index stats "
+            "(numDocs, startTime, etc.) with jvm, os, and cache as null. "
+            "Set to true to also fetch JVM memory, OS metrics, and cache statistics — "
+            "useful for diagnostics but should not be used for frequent liveness probes."
+        ),
+    )
+) -> Dict:
     """ Return status and count information from the underyling Solr instance. """
-    return await status()
+    return await status(full=full)
 
 
-async def status() -> Dict:
+async def status(full: bool = False) -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
-    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
-    async with httpx.AsyncClient(timeout=None) as client:
-        response = await client.get(query_url, params={
-            'action': 'STATUS'
-        })
-    if response.status_code >= 300:
-        LOGGER.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
-        response.raise_for_status()
-    result = response.json()
+    solr = await solr_client.fetch_status(full=full)
 
     # Do we know the Babel version and version URL? It will be stored in an environmental variable if we do.
     babel_version = os.environ.get("BABEL_VERSION", "unknown")
     babel_version_url = os.environ.get("BABEL_VERSION_URL", "")
 
-    # We should have a status for name_lookup_shard1_replica_n1.
-    if 'status' in result and 'name_lookup_shard1_replica_n1' in result['status']:
-        core = result['status']['name_lookup_shard1_replica_n1']
+    # Look up the BIOLINK_MODEL_TAG.
+    # Note: this should be a tag from the Biolink Model repo, e.g. "master" or "v4.3.6".
+    biolink_model_tag = os.environ.get("BIOLINK_MODEL_TAG", "master")
+    biolink_model_url = f"https://github.com/biolink/biolink-model/tree/{biolink_model_tag}"
+    biolink_model_download_url = f"https://raw.githubusercontent.com/biolink/biolink-model/{biolink_model_tag}/biolink-model.yaml"
 
-        index = {}
-        if 'index' in core:
-            index = core['index']
+    # Figure out the NameRes version.
+    nameres_version = "master"
+    app_info = get_app_info()
+    if 'version' in app_info and app_info['version']:
+        nameres_version = 'v' + app_info['version']
+    # Unpack query_log into parallel lists for latency and rate computations.
+    log_snapshot = list(query_log)  # snapshot to avoid mutation during computation
+    # Sort by timestamp: concurrent requests complete in a different order than they started,
+    # so insertion order does not reflect arrival order.
+    log_snapshot.sort(key=lambda x: x[0])
+    timestamps = [ts for ts, _ in log_snapshot]
+    durations = [dur for _, dur in log_snapshot]
 
+    # Latency percentiles.
+    if len(durations) >= 2:
+        qs = statistics.quantiles(durations, n=100)
+        p50, p95, p99 = qs[49], qs[94], qs[98]
+    else:
+        p50 = p95 = p99 = None
+
+    # Inter-arrival times (gaps between consecutive query start timestamps, in ms).
+    # Requires >= 3 timestamps (>= 2 gaps) because statistics.quantiles needs at least 2 data points.
+    inter_arrival_ms = None
+    if len(timestamps) >= 3:
+        gaps = [(timestamps[i] - timestamps[i - 1]) * 1000 for i in range(1, len(timestamps))]
+        gaps_sorted = sorted(gaps)
+        inter_arrival_ms = {
+            'mean': round(sum(gaps) / len(gaps), 2),
+            'median': round(statistics.median(gaps), 2),
+            'min': round(gaps_sorted[0], 2),
+            'max': round(gaps_sorted[-1], 2),
+            'p95': round(statistics.quantiles(gaps, n=100)[94], 2),
+        }
+
+    # Latency buckets: fraction of queries in each performance tier.
+    total = len(durations)
+    if total:
+        n_ideal = n_fine = n_slow = n_very_slow = 0
+        for d in durations:
+            if d < IDEAL_QUERY_THRESHOLD_MS:
+                n_ideal += 1
+            elif d < SLOW_QUERY_THRESHOLD_MS:
+                n_fine += 1
+            elif d < VERY_SLOW_QUERY_THRESHOLD_MS:
+                n_slow += 1
+            else:
+                n_very_slow += 1
+        latency_buckets = {
+            'slow_threshold_ms': SLOW_QUERY_THRESHOLD_MS,
+            'ideal_pct':     round(n_ideal     / total, 4),
+            'fine_pct':      round(n_fine      / total, 4),
+            'slow_pct':      round(n_slow      / total, 4),
+            'very_slow_pct': round(n_very_slow / total, 4),
+        }
+    else:
+        latency_buckets = None
+
+    # Windowed query rates. Scan from newest to oldest, stopping at the largest window.
+    now = time.time()
+    count_10s = count_60s = count_300s = 0
+    for ts in reversed(timestamps):
+        age = now - ts
+        if age <= 300:
+            count_300s += 1
+            if age <= 60:
+                count_60s += 1
+                if age <= 10:
+                    count_10s += 1
+        else:
+            break
+
+    history_span = (timestamps[-1] - timestamps[0]) if len(timestamps) >= 2 else 0
+    time_since_last = (now - timestamps[-1]) if timestamps else None
+
+    recent_queries = {
+        'count': len(durations),
+        'mean_time_ms': round(sum(durations) / len(durations), 2) if durations else -1,
+        'p50_ms': p50,
+        'p95_ms': p95,
+        'p99_ms': p99,
+        'latency_buckets': latency_buckets,
+        'rate': {
+            'history_span_seconds': round(history_span, 1),
+            'time_since_last_query_seconds': round(time_since_last, 2) if time_since_last is not None else None,
+            'queries_last_10s': count_10s,
+            'queries_per_second_last_10s': round(count_10s / 10, 2),
+            'queries_last_60s': count_60s,
+            'queries_per_second_last_60s': round(count_60s / 60, 2),
+            'queries_last_300s': count_300s,
+            'queries_per_second_last_300s': round(count_300s / 300, 2),
+            'inter_arrival_ms': inter_arrival_ms,
+        },
+    }
+
+    biolink_model = {
+        'tag': biolink_model_tag,
+        'url': biolink_model_url,
+        'download_url': biolink_model_download_url,
+    }
+
+    if solr['found']:
+        solr_dict = {k: v for k, v in solr.items() if k != 'found'}
         return {
             'status': 'ok',
             'message': 'Reporting results from primary core.',
             'babel_version': babel_version,
             'babel_version_url': babel_version_url,
-            'startTime': core['startTime'],
-            'numDocs': index.get('numDocs', ''),
-            'maxDoc': index.get('maxDoc', ''),
-            'deletedDocs': index.get('deletedDocs', ''),
-            'version': index.get('version', ''),
-            'segmentCount': index.get('segmentCount', ''),
-            'lastModified': index.get('lastModified', ''),
-            'size': index.get('size', ''),
+            'biolink_model': biolink_model,
+            'nameres_version': nameres_version,
+            'recent_queries': recent_queries,
+            'solr': solr_dict,
         }
     else:
         return {
             'status': 'error',
-            'message': 'Expected core not found.'
+            'message': 'Expected core not found.',
+            'babel_version': babel_version,
+            'babel_version_url': babel_version_url,
+            'biolink_model': biolink_model,
+            'nameres_version': nameres_version,
+            'solr': {
+                'jvm': solr['jvm'],
+                'os': solr['os'],
+            },
         }
 
 
@@ -125,7 +249,7 @@ async def reverse_lookup_get(
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(curies)
+    return await curie_lookup(curies)
 
 
 @app.get(
@@ -135,14 +259,14 @@ async def reverse_lookup_get(
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
-async def lookup_names_get(
+async def synonyms_get(
         preferred_curies: List[str]= Query(
             example=["MONDO:0005737", "MONDO:0009757"],
             description="A list of CURIEs to look up synonyms for."
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(preferred_curies)
+    return await curie_lookup(preferred_curies)
 
 
 @app.post(
@@ -159,7 +283,7 @@ async def lookup_names_post(
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(request.curies)
+    return await curie_lookup(request.curies)
 
 
 @app.post(
@@ -169,17 +293,18 @@ async def lookup_names_post(
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
-async def lookup_names_post(
+async def synonyms_post(
         request: SynonymsRequest = Body(..., example={
             "preferred_curies": ["MONDO:0005737", "MONDO:0009757"],
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await reverse_lookup(request.preferred_curies)
+    return await curie_lookup(request.preferred_curies)
 
 
-async def reverse_lookup(curies) -> Dict[str, Dict]:
+async def curie_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
+    time_start = time.perf_counter_ns()
     query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
@@ -199,6 +324,10 @@ async def reverse_lookup(curies) -> Dict[str, Dict]:
     }
     for doc in response_json["response"]["docs"]:
         output[doc["curie"]] = doc
+    time_end = time.perf_counter_ns()
+
+    logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)} took {(time_end - time_start)/1_000_000:.2f}ms")
+
     return output
 
 class LookupResult(BaseModel):
@@ -351,6 +480,8 @@ async def lookup(string: str,
         will be returned, rather than filtering to concepts that are both PhenotypicFeature and Disease.
     """
 
+    time_start = time.perf_counter_ns()
+
     # First, we strip and lowercase the query since all our indexes are case-insensitive.
     string_lc = string.strip().lower()
 
@@ -459,16 +590,18 @@ async def lookup(string: str,
         "fields": "*, score",
         "params": inner_params,
     }
-    logging.debug(f"Query: {json.dumps(params, indent=2)}")
+    logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
+    time_solr_start = time.perf_counter_ns()
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
-        LOGGER.error("Solr REST error: %s", response.text)
+        logger.error("Solr REST error: %s", response.text)
         response.raise_for_status()
     response = response.json()
-    logging.debug(f"Solr response: {json.dumps(response, indent=2)}")
+    time_solr_end = time.perf_counter_ns()
+    logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
 
     # Associate highlighting information with search results.
     highlighting_response = response.get("highlighting", {})
@@ -510,6 +643,22 @@ async def lookup(string: str,
                            taxa=doc.get("taxa", []),
                            clique_identifier_count=doc.get("clique_identifier_count", 0),
                            types=[f"biolink:{d}" for d in doc.get("types", [])]))
+
+    time_end = time.perf_counter_ns()
+    time_taken_ms = (time_end - time_start)/1_000_000
+    solr_ms = (time_solr_end - time_solr_start)/1_000_000
+    query_log.append((time_start / 1_000_000_000, time_taken_ms))
+    log_msg = (
+        f"Lookup query to Solr for {json.dumps(string)} "
+        f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, "
+        f"biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, "
+        f"only_taxa={only_taxa}) "
+        f"took {time_taken_ms:.2f}ms (with {solr_ms:.2f}ms waiting for Solr)"
+    )
+    if time_taken_ms > SLOW_QUERY_THRESHOLD_MS:
+        logger.warning("SLOW QUERY: " + log_msg)
+    else:
+        logger.info(log_msg)
 
     return outputs
 
@@ -579,6 +728,7 @@ class NameResQuery(BaseModel):
           tags=["lookup"]
 )
 async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
+    time_start = time.perf_counter_ns()
     result = {}
     for string in query.strings:
         result[string] = await lookup(
@@ -591,6 +741,9 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             query.only_prefixes,
             query.exclude_prefixes,
             query.only_taxa)
+    time_end = time.perf_counter_ns()
+    logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}) took {(time_end - time_start)/1_000_000:.2f}ms")
+
     return result
 
 
@@ -614,7 +767,7 @@ if os.environ.get('OTEL_ENABLED', 'false') == 'true':
     # these supresses such warnings.
     logging.captureWarnings(capture=True)
     warnings.filterwarnings("ignore", category=ResourceWarning)
-    otel_service_name = os.environ.get('SERVER_NAME', 'infores:sri-node-normalizer')
+    otel_service_name = os.environ.get('SERVER_NAME', 'infores:sri-name-resolver')
     assert otel_service_name and isinstance(otel_service_name, str)
 
     otlp_host = os.environ.get("JAEGER_HOST", "http://localhost/").rstrip('/')
