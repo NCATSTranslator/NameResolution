@@ -120,6 +120,24 @@ async def status() -> Dict:
             'p95': round(statistics.quantiles(gaps, n=100)[94], 2),
         }
 
+    # Latency buckets: fraction of queries in each performance tier.
+    # Boundaries: ideal < 100ms, fine < SLOW_QUERY_THRESHOLD_MS, slow < 1000ms, very_slow >= 1000ms.
+    total = len(durations)
+    if total:
+        n_ideal     = sum(1 for d in durations if d < 100)
+        n_fine      = sum(1 for d in durations if 100 <= d < SLOW_QUERY_THRESHOLD_MS)
+        n_slow      = sum(1 for d in durations if SLOW_QUERY_THRESHOLD_MS <= d < 1000)
+        n_very_slow = sum(1 for d in durations if d >= 1000)
+        latency_buckets = {
+            'slow_threshold_ms': SLOW_QUERY_THRESHOLD_MS,
+            'ideal_pct':     round(n_ideal     / total, 4),
+            'fine_pct':      round(n_fine      / total, 4),
+            'slow_pct':      round(n_slow      / total, 4),
+            'very_slow_pct': round(n_very_slow / total, 4),
+        }
+    else:
+        latency_buckets = None
+
     # Windowed query rates. Scan from newest to oldest, stopping at the largest window.
     now = time.time()
     count_10s = count_60s = count_300s = 0
@@ -143,6 +161,7 @@ async def status() -> Dict:
         'p50_ms': p50,
         'p95_ms': p95,
         'p99_ms': p99,
+        'latency_buckets': latency_buckets,
         'rate': {
             'history_span_seconds': round(history_span, 1),
             'time_since_last_query_seconds': round(time_since_last, 2) if time_since_last is not None else None,
