@@ -304,7 +304,7 @@ async def synonyms_post(
 
 async def curie_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    time_start = time.time_ns()
+    time_start = time.perf_counter_ns()
     query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
@@ -324,7 +324,7 @@ async def curie_lookup(curies) -> Dict[str, Dict]:
     }
     for doc in response_json["response"]["docs"]:
         output[doc["curie"]] = doc
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
 
     logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)} took {(time_end - time_start)/1_000_000:.2f}ms")
 
@@ -480,7 +480,7 @@ async def lookup(string: str,
         will be returned, rather than filtering to concepts that are both PhenotypicFeature and Disease.
     """
 
-    time_start = time.time_ns()
+    time_start = time.perf_counter_ns()
 
     # First, we strip and lowercase the query since all our indexes are case-insensitive.
     string_lc = string.strip().lower()
@@ -592,7 +592,7 @@ async def lookup(string: str,
     }
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
-    time_solr_start = time.time_ns()
+    time_solr_start = time.perf_counter_ns()
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(query_url, json=params)
@@ -600,7 +600,7 @@ async def lookup(string: str,
         logger.error("Solr REST error: %s", response.text)
         response.raise_for_status()
     response = response.json()
-    time_solr_end = time.time_ns()
+    time_solr_end = time.perf_counter_ns()
     logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
 
     # Associate highlighting information with search results.
@@ -644,7 +644,7 @@ async def lookup(string: str,
                            clique_identifier_count=doc.get("clique_identifier_count", 0),
                            types=[f"biolink:{d}" for d in doc.get("types", [])]))
 
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
     solr_ms = (time_solr_end - time_solr_start)/1_000_000
     query_log.append((time_start / 1_000_000_000, time_taken_ms))
@@ -728,7 +728,7 @@ class NameResQuery(BaseModel):
           tags=["lookup"]
 )
 async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
-    time_start = time.time_ns()
+    time_start = time.perf_counter_ns()
     result = {}
     for string in query.strings:
         result[string] = await lookup(
@@ -741,7 +741,7 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             query.only_prefixes,
             query.exclude_prefixes,
             query.only_taxa)
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
     logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}) took {(time_end - time_start)/1_000_000:.2f}ms")
 
     return result
