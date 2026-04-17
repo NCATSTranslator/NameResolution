@@ -20,6 +20,7 @@ The best place to start is the Jupyter Notebook, which walks through the most co
 ## Documentation
 
 * [Translator Guide](documentation/TranslatorGuide.md) — what to do when results are unexpected, when to use `/synonyms` vs. NodeNorm, and performance tips
+* [Using NameRes from an AI agent](documentation/LLMs.md) — the agent skill, how to install it, and how to fetch it from a running instance at `/llms.txt`
 * [API documentation](documentation/API.md) — full reference for all NameRes endpoints
 * [Where NameRes data comes from](documentation/Babel.md) — how Babel builds the concepts NameRes searches, and the gotchas that follow from that
 * [Scoring](documentation/Scoring.md) — how NameRes scores and ranks results
