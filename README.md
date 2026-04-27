@@ -9,6 +9,7 @@ Multiple results may be returned representing possible conceptual matches, but a
 Note that the results returned by this service have been conflated using both GeneProtein and DrugChemical conflation; you can read more about this at the [Conflation documentation](https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md).
 
 * See this [Jupyter Notebook](documentation/NameResolution.ipynb) for examples of use.
+* See [Using with AI Agents / LLMs](documentation/LLMs.md) for instructions on using NameRes from an AI coding agent.
 * See the [API documentation](documentation/API.md) for information about the NameRes API.
 * See [Scoring](documentation/Scoring.md) for information about the scoring algorithm used by NameRes.
 * See [Deployment](documentation/Deployment.md) for instructions on deploying NameRes.
