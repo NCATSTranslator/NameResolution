@@ -260,3 +260,4 @@ def test_only_taxa_queries():
     results_ftd_disease_with_only_taxon = response.json()
     assert len(results_ftd_disease_with_only_taxon) == 1
     assert results_ftd_disease_with_only_taxon[0]['curie'] == 'MONDO:0010857'
+

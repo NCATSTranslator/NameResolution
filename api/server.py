@@ -9,6 +9,7 @@ import warnings
 import time
 import os
 import re
+from collections import deque
 from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
 
@@ -35,6 +36,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Solr core name for this application.
+SOLR_CORE_NAME = 'name_lookup_shard1_replica_n1'
+
+# We track the time taken for each Solr query for the last 1000 queries so we can track performance via /status.
+DEFAULT_RECENT_TIMES_COUNT = 1000
+RECENT_TIMES_COUNT = int(os.getenv("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_COUNT))
+recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
+recent_solr_times = deque(maxlen=RECENT_TIMES_COUNT)
+
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
 @app.get("/", include_in_schema=False)
@@ -50,21 +60,74 @@ async def docs_redirect():
          description="<p>This endpoint will return status information and a list of counts from the underlying Solr database instance for this NameRes instance.</p>"
                      "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#status\">API documentation</a>.</p>"
          )
-async def status_get() -> Dict:
+async def status_get(metrics: bool = False) -> Dict:
     """ Return status and count information from the underyling Solr instance. """
-    return await status()
+    return await status(metrics)
 
 
-async def status() -> Dict:
+async def status(include_metrics: bool = False) -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
+    metrics_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/metrics"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.get(query_url, params={
             'action': 'STATUS'
         })
-    if response.status_code >= 300:
-        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
-        response.raise_for_status()
+        if response.status_code >= 300:
+            logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
+            response.raise_for_status()
+
+        # Fetch Solr query handler, cache, and JVM metrics for strain detection.
+        # A single call with group=core&group=jvm retrieves both in one round-trip.
+        # Only performed when the caller passes ?metrics=true, as it adds latency.
+        solr_metrics = {
+            "message": "Use /status?metrics=true to retrieve these metrics."
+        }
+        if include_metrics:
+            try:
+                metrics_resp = await client.get(metrics_url, params=[
+                    ('group', 'core'),
+                    ('group', 'jvm'),
+                    ('prefix', 'QUERY./select'),
+                    ('prefix', 'CACHE.core.queryResultCache'),
+                    ('prefix', 'memory.heap'),
+                    ('prefix', 'os.processCpuLoad'),
+                    ('wt', 'json'),
+                ])
+                if metrics_resp.status_code < 300:
+                    all_metrics = metrics_resp.json().get('metrics', {})
+
+                    core_data = all_metrics.get(f'solr.core.{SOLR_CORE_NAME}', {})
+                    qh = core_data.get('QUERY./select.requestTimes', {})
+                    cache = core_data.get('CACHE.core.queryResultCache', {})
+                    heap = all_metrics.get('solr.jvm', {}).get('memory.heap', {})
+                    cpu = all_metrics.get('solr.jvm', {}).get('os.processCpuLoad', None)
+
+                    solr_metrics = {
+                        'query_handler': {
+                            'requests': core_data.get('QUERY./select.requests'),
+                            'errors': core_data.get('QUERY./select.errors'),
+                            'timeouts': core_data.get('QUERY./select.timeouts'),
+                            'mean_ms': qh.get('mean_ms'),
+                            'p75_ms': qh.get('p75_ms'),
+                            'p95_ms': qh.get('p95_ms'),
+                            'p99_ms': qh.get('p99_ms'),
+                        },
+                        'cache': {
+                            'hitratio': cache.get('hitratio'),
+                            'evictions': cache.get('evictions'),
+                            'size': cache.get('size'),
+                        },
+                        'jvm': {
+                            'heap_used_mb': round(heap.get('used', 0) / 1_048_576, 1) if 'used' in heap else None,
+                            'heap_max_mb': round(heap.get('max', 0) / 1_048_576, 1) if 'max' in heap else None,
+                            'heap_used_pct': round(heap.get('used', 0) / heap['max'] * 100, 1) if heap.get('max') else None,
+                            'cpu_load': cpu,
+                        },
+                    }
+            except Exception:
+                logger.warning("Failed to retrieve Solr metrics for /status", exc_info=True)
+
     result = response.json()
 
     # Do we know the Babel version and version URL? It will be stored in an environmental variable if we do.
@@ -83,9 +146,17 @@ async def status() -> Dict:
     if 'version' in app_info and app_info['version']:
         nameres_version = 'v' + app_info['version']
 
-    # We should have a status for name_lookup_shard1_replica_n1.
-    if 'status' in result and 'name_lookup_shard1_replica_n1' in result['status']:
-        core = result['status']['name_lookup_shard1_replica_n1']
+    # Prepare recent times for reporting.
+    recent_queries = {
+        'max': RECENT_TIMES_COUNT,
+        'count': len(recent_query_times),
+        'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
+        'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
+    }
+
+    # We should have a status for SOLR_CORE_NAME.
+    if 'status' in result and SOLR_CORE_NAME in result['status']:
+        core = result['status'][SOLR_CORE_NAME]
 
         index = {}
         if 'index' in core:
@@ -110,6 +181,8 @@ async def status() -> Dict:
             'segmentCount': index.get('segmentCount', ''),
             'lastModified': index.get('lastModified', ''),
             'size': index.get('size', ''),
+            'recent_queries': recent_queries,
+            'solr_metrics': solr_metrics,
         }
     else:
         return {
@@ -122,7 +195,9 @@ async def status() -> Dict:
                 'url': biolink_model_url,
                 'download_url': biolink_model_download_url,
             },
+            'recent_queries': recent_queries,
             'nameres_version': nameres_version,
+            'solr_metrics': solr_metrics,
         }
 
 
@@ -605,9 +680,13 @@ async def lookup(string: str,
                            debug=debug_for_this_request))
 
     time_end = time.time_ns()
+    time_taken_ms = (time_end - time_start)/1_000_000
+    time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
+    recent_query_times.append(time_taken_ms)
+    recent_solr_times.append(time_taken_ms_solr)
     logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
                  f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
-                 f"took {(time_end - time_start)/1_000_000:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
+                 f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms waiting for Solr)"
     )
 
     return outputs
