@@ -159,7 +159,7 @@ async def reverse_lookup_get(
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await curie_lookup(curies)
+    return await name_lookup(curies)
 
 
 @app.get(
@@ -178,7 +178,7 @@ async def synonyms_get(
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await curie_lookup(preferred_curies)
+    return await name_lookup(preferred_curies)
 
 
 @app.post(
@@ -195,7 +195,7 @@ async def lookup_names_post(
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await curie_lookup(request.curies)
+    return await name_lookup(request.curies)
 
 
 @app.post(
@@ -213,10 +213,10 @@ async def synonyms_post(
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await curie_lookup(request.preferred_curies)
+    return await name_lookup(request.preferred_curies)
 
 
-async def curie_lookup(curies) -> Dict[str, Dict]:
+async def name_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
     time_start = time.time_ns()
     query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
