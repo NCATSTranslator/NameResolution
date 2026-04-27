@@ -13,10 +13,10 @@
 # require SOLR_SERVER
 : "${SOLR_SERVER:?SOLR_SERVER must be set}"
 
-echo "Setting up Solr database with SOLR_SERVER='$SOLR_SERVER'"
+echo "Setting up Solr database (standalone mode) with SOLR_SERVER='$SOLR_SERVER'"
 
-# add collection
-curl -X POST "$SOLR_SERVER/solr/admin/collections?action=CREATE&name=name_lookup&numShards=1&replicationFactor=1"
+# add core (standalone mode: uses _default configset)
+curl "$SOLR_SERVER/solr/admin/cores?action=CREATE&name=name_lookup&configSet=_default"
 
 # do not autocreate fields
 curl "$SOLR_SERVER/solr/name_lookup/config" -d '{"set-user-property": {"update.autoCreateFields": "false"}}'
@@ -94,7 +94,7 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
         {
             "name":"types",
             "type":"string",
-            "stored":true
+            "stored":true,
             "multiValued":true
         },
         {

@@ -9,8 +9,6 @@ services:
       SOLR_JAVA_MEM: '-Xmx16G'
     ports:
       - '8983:8983'
-    command: ['-DzkRun']
-
     # Solr needs to store its data somewhere. It defaults to `./data`, but you can reconfigure this to any
     # directory you want.
     volumes:
