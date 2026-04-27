@@ -13,8 +13,10 @@ info:
     have been correctly normalized using the
     <a href="https://github.com/NCATSTranslator/NodeNormalization">Node Normalization</a> service.<p/>You can read more
     about this API on the <a href="https://github.com/NCATSTranslator/NameResolution">NameResolution GitHub repository</a>.<p/>
-    Note that the returned by this service have been conflated using both GeneProtein and DrugChemical conflation;
-    you can read more about this at the <a href="https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md">Conflation documentation</a>.'
+    <p>Note that the results returned by this service have been conflated using both GeneProtein and DrugChemical
+    conflation; you can read more about this at the
+    <a href="https://github.com/NCATSTranslator/Babel/blob/main/docs/Conflation.md">Conflation documentation</a>.
+    The active conflations for any deployment can be discovered via the <code>/status</code> endpoint.</p>'
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT

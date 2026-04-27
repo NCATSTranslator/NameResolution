@@ -139,6 +139,7 @@ The `id.identifier` field in the response is the preferred CURIE you can then pa
 | Are these two CURIEs equivalent? | NodeNorm |
 | What Biolink types does this CURIE have? | NodeNorm |
 | Why didn't a particular name match in `/lookup`? | `/synonyms` + `highlighting` |
+| Which conflations are active in this NameRes deployment? | `/status` (`conflations` field) |
 
 ---
 
