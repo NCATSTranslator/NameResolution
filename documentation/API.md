@@ -91,13 +91,17 @@ The Name Resolver largely consists of two [search endpoints](#search-endpoints):
 ## Conflation
 
 Unlike the Node Normalizer, the Name Resolution Service does not currently support on-the-fly conflation. Instead,
-all the [Babel conflations](https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md) are turned on when Solr database is built. At the moment, this includes:
-* GeneProtein conflation: protein-encoding genes are conflated with the protein(s) they encode, and the gene identifier
-  is used to identify this concept. Therefore, if you search for ""
-* DrugChemical conflation: drugs are conflated with their active ingredient, and the identifier for the active ingredient
-  is used to identify this concept.
-This means that -- for example -- protein-encoding genes will include the synonyms found
-for the protein they encode, and that no separate entry will be available for those proteins.
+all the [Babel conflations](https://github.com/NCATSTranslator/Babel/blob/main/docs/Conflation.md) are baked in when the Solr database is built. At the moment, this includes:
+* **GeneProtein conflation:** protein-encoding genes are conflated with the protein(s) they encode, and the gene identifier
+  is used to identify this concept. Therefore, if you search for a protein name, you will typically receive the gene
+  identifier (e.g., searching for "dystrophin" returns `NCBIGene:1756` rather than a UniProtKB identifier).
+* **DrugChemical conflation:** drugs are conflated with their active ingredient, and the identifier for the active
+  ingredient is used to identify this concept.
+
+This means that protein-encoding genes include the synonyms found for the protein they encode, and no separate
+entry is available for those proteins in NameRes.
+
+The active conflations for any NameRes deployment can be queried programmatically via the [`/status` endpoint](#status).
 
 Once you have an identifier from Name Resolver, you can use the [Node Normalizer](https://nodenormalization-sri.renci.org/)
 to look up the equivalent identifiers for that CURIE with and without conflation. Please use the Node Normalizer
@@ -325,6 +329,8 @@ Solr database.
     "url": "https://github.com/biolink/biolink-model/tree/v4.2.6-rc5",
     "download_url": "https://raw.githubusercontent.com/biolink/biolink-model/v4.2.6-rc5/biolink-model.yaml"
   },
+  "conflations": ["GeneProtein", "DrugChemical"],
+  "conflation_url": "https://github.com/NCATSTranslator/Babel/blob/main/docs/Conflation.md",
   "nameres_version": "v1.5.1",
   "startTime": "2025-12-19T11:53:09.638Z",
   "numDocs": 425583391,
