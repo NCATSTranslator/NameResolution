@@ -79,7 +79,8 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
         {
             "name":"curie",
             "type":"string",
-            "stored":true
+            "stored":true,
+            "docValues":true
         },
         {
             "name":"preferred_name",
@@ -96,8 +97,9 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
         {
             "name":"types",
             "type":"string",
-            "stored":true
-            "multiValued":true
+            "stored":true,
+            "multiValued":true,
+            "docValues":true
         },
         {
             "name":"shortest_name_length",
@@ -116,12 +118,14 @@ curl -X POST -H 'Content-type:application/json' --data-binary '{
             "name":"taxa",
             "type":"string",
             "stored":true,
-            "multiValued":true
+            "multiValued":true,
+            "docValues":true
         },
         {
             "name":"clique_identifier_count",
             "type":"pint",
-            "stored":true
+            "stored":true,
+            "docValues":true
         }
     ] }' 'http://localhost:8983/solr/name_lookup/schema'
 
@@ -150,6 +154,13 @@ for f in $1; do
 	    'http://localhost:8983/solr/name_lookup/update/json/docs?processor=uuid&uuid.fieldName=id&commit=true'
 	sleep 30
 done
+
+# Force-merge segments down to a small fixed count. The index is read-only after the load
+# loop above, so a one-time merge meaningfully reduces per-query work for every subsequent
+# search. waitSearcher=true blocks until the merge is committed and a new searcher is open.
+echo "Force-merging segments..."
+curl -s 'http://localhost:8983/solr/name_lookup/update?optimize=true&maxSegments=8&waitSearcher=true'
+
 echo "Check solr"
 curl -s --negotiate -u: 'localhost:8983/solr/name_lookup/query?q=*:*&rows=0'
 

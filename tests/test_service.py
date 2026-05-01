@@ -191,6 +191,57 @@ def test_bulk_lookup():
     assert results['Parkinson'][0]['label'] == "Parkinson disease"
 
 
+def test_bulk_lookup_preserves_input_order():
+    """ Bulk lookup should return a dict whose keys match the input strings in input order,
+    even now that lookups run concurrently under a Semaphore. """
+    client = TestClient(app)
+    inputs = ['Parkinson', 'beta-secretase', 'alzheimer']
+    response = client.post("/bulk-lookup", json={'strings': inputs, 'limit': 5})
+    assert response.status_code == 200
+    results = response.json()
+    assert list(results.keys()) == inputs
+    for s in inputs:
+        assert isinstance(results[s], list)
+
+
+def test_only_prefixes_filter():
+    """ The only_prefixes filter should restrict results to CURIEs in the listed namespaces.
+    Verifies the prefix-wildcard query rewrite works for both single and pipe-separated inputs. """
+    client = TestClient(app)
+
+    response = client.get("/lookup", params={'string': 'Parkinson', 'limit': 100, 'only_prefixes': 'MONDO'})
+    syns = response.json()
+    assert len(syns) > 0
+    assert all(s['curie'].startswith('MONDO:') for s in syns)
+
+    response = client.get("/lookup", params={'string': 'Parkinson', 'limit': 100, 'only_prefixes': 'MONDO|HP'})
+    syns = response.json()
+    assert len(syns) > 0
+    assert all(s['curie'].split(':', 1)[0] in {'MONDO', 'HP'} for s in syns)
+
+    # Sanitization: garbage characters in the prefix should not blow up the query — they get
+    # stripped and the remaining alphanumerics are used. An entirely-invalid prefix should be
+    # dropped, not produce a 500.
+    response = client.get("/lookup", params={'string': 'Parkinson', 'limit': 100,
+                                             'only_prefixes': 'MONDO|/*evil*/'})
+    assert response.status_code == 200
+
+
+def test_exclude_prefixes_filter():
+    """ The exclude_prefixes filter should drop results whose CURIE is in the listed namespaces. """
+    client = TestClient(app)
+
+    # Baseline: no filter.
+    response = client.get("/lookup", params={'string': 'Parkinson', 'limit': 100})
+    baseline = response.json()
+    assert any(s['curie'].startswith('MONDO:') for s in baseline)
+
+    # With MONDO excluded.
+    response = client.get("/lookup", params={'string': 'Parkinson', 'limit': 100, 'exclude_prefixes': 'MONDO'})
+    syns = response.json()
+    assert all(not s['curie'].startswith('MONDO:') for s in syns)
+
+
 def test_synonyms():
     """
     Test the /synonyms endpoints -- these are used to look up all the information we know about a preferred CURIE.
