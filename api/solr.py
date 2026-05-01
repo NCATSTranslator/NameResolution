@@ -129,11 +129,24 @@ class SolrClient:
             r.raise_for_status()
         return r.json()
 
+    async def _fetch_all(self, client: httpx.AsyncClient, full: bool):
+        """Run cores (and optionally sysinfo + mbeans) concurrently against the given client."""
+        if full:
+            cores_data, sysinfo_data, mbeans_data = await asyncio.gather(
+                self.fetch_cores(client),
+                self.fetch_sysinfo(client),
+                self.fetch_mbeans(client),
+            )
+        else:
+            cores_data = await self.fetch_cores(client)
+            sysinfo_data = mbeans_data = None
+        return cores_data, sysinfo_data, mbeans_data
+
     # ------------------------------------------------------------------ #
     # High-level: fetch everything and return a parsed snapshot           #
     # ------------------------------------------------------------------ #
 
-    async def fetch_status(self, full: bool = False) -> dict:
+    async def fetch_status(self, full: bool = False, client: httpx.AsyncClient | None = None) -> dict:
         """Fetch and parse Solr monitoring data.
 
         When ``full=False`` (default), only the cores endpoint is called,
@@ -141,21 +154,21 @@ class SolrClient:
         ``None``.  Pass ``full=True`` to also fetch JVM, OS, and cache metrics
         (three concurrent requests instead of one).
 
+        Pass ``client`` to reuse a caller-managed ``httpx.AsyncClient`` (e.g. an
+        application-wide pool); otherwise a short-lived client is created and
+        torn down for this call.  The caller-managed path keeps connections
+        alive across requests, which matters for high-throughput status polling.
+
         Returns a dict with a ``found`` flag plus parsed fields.  Callers
         should check ``result["found"]`` before accessing index-level keys.
 
         Raises ``httpx.HTTPStatusError`` if the cores endpoint is unavailable.
         """
-        async with httpx.AsyncClient(timeout=None) as client:
-            if full:
-                cores_data, sysinfo_data, mbeans_data = await asyncio.gather(
-                    self.fetch_cores(client),
-                    self.fetch_sysinfo(client),
-                    self.fetch_mbeans(client),
-                )
-            else:
-                cores_data = await self.fetch_cores(client)
-                sysinfo_data = mbeans_data = None
+        if client is None:
+            async with httpx.AsyncClient(timeout=None) as owned:
+                cores_data, sysinfo_data, mbeans_data = await self._fetch_all(owned, full)
+        else:
+            cores_data, sysinfo_data, mbeans_data = await self._fetch_all(client, full)
 
         jvm_info   = self.parse_jvm(sysinfo_data)   if sysinfo_data else None
         os_info    = self.parse_os(sysinfo_data)    if sysinfo_data else None

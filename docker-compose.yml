@@ -5,7 +5,7 @@ services:
     environment:
       # Change this setting to control how much memory you would like your Solr setup to have.
       # Note that your Docker will need to be configured to allow this amount of memory.
-      SOLR_JAVA_MEM: '-Xms25G -Xmx25G'
+      SOLR_JAVA_MEM: '-Xms8G -Xmx16G'
     ports:
       - '8983:8983'
     command: ['-DzkRun']
