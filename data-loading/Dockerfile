@@ -71,8 +71,9 @@ RUN pip3 install -r requirements.txt
 COPY --chown=nru setup-and-load-solr.sh ${ROOT}
 COPY --chown=nru README.md ${ROOT}
 COPY --chown=nru Makefile ${ROOT}
+COPY --chown=nru conf/ ${ROOT}/conf/
 
 # On entry, start the Solr instance.
 ENV SOLR_EXEC="${ROOT}/solr/solr-${SOLR_VERSION}/bin/solr"
 ENV SOLR_DIR="$SOLR_DIR"
-ENTRYPOINT ${SOLR_EXEC} -cloud -f -p 8983 -m 64G -s ${SOLR_DIR}
+ENTRYPOINT ${SOLR_EXEC} -f -p 8983 -m 64G -s ${SOLR_DIR}

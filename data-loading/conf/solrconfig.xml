@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Solr configuration for NameRes (standalone mode, read-only deployment).
+
+  This configuration is installed into the name_lookup core before the backup
+  tarball is created, so that deployed NameRes instances are read-only:
+  - NoOpUpdateHandler silently drops all document write requests.
+  - ManagedIndexSchemaFactory keeps the schema in conf/managed-schema.xml
+    alongside the index data (not in ZooKeeper), making the core self-contained.
+
+  Data is loaded using the _default configset (which allows writes) and then
+  this file replaces the default solrconfig.xml before tarring, so the
+  deployed tarball is immutable.
+-->
+<config>
+  <luceneMatchVersion>9.0</luceneMatchVersion>
+
+  <!-- Schema stored in conf/managed-schema.xml alongside the index data -->
+  <schemaFactory class="ManagedIndexSchemaFactory">
+    <bool name="mutable">false</bool>
+    <str name="managedSchemaResourceName">managed-schema.xml</str>
+  </schemaFactory>
+
+  <!-- Silently drop all document write requests (read-only mode) -->
+  <updateHandler class="solr.NoOpUpdateHandler"/>
+
+  <requestHandler name="/select" class="solr.SearchHandler">
+    <lst name="defaults">
+      <str name="echoParams">explicit</str>
+      <int name="rows">10</int>
+    </lst>
+  </requestHandler>
+
+  <requestHandler name="/query" class="solr.SearchHandler">
+    <lst name="defaults">
+      <str name="echoParams">explicit</str>
+      <int name="rows">10</int>
+    </lst>
+  </requestHandler>
+
+  <requestHandler name="/admin/ping" class="solr.PingRequestHandler">
+    <lst name="invariants">
+      <str name="q">solrpingquery</str>
+    </lst>
+    <lst name="defaults">
+      <str name="echoParams">all</str>
+    </lst>
+    <str name="healthcheckFile">server-enabled.txt</str>
+  </requestHandler>
+
+</config>
