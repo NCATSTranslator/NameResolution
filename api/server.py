@@ -281,7 +281,7 @@ async def lookup_curies_get(
             ge=0
         )] = 0,
         limit: Annotated[int, Query(
-            description="The number of results to skip. Can be used to page through the results of a query.",
+            description="The number of results to return. Can be used to page through the results of a query.",
             # Limit should be greater than or equal to zero and less than or equal to 1000.
             ge=0,
             le=1000
@@ -345,7 +345,7 @@ async def lookup_curies_post(
             ge=0
         )] = 0,
         limit: Annotated[int, Query(
-            description="The number of results to skip. Can be used to page through the results of a query.",
+            description="The number of results to return. Can be used to page through the results of a query.",
             # Limit should be greater than or equal to zero and less than or equal to 1000.
             ge=0,
             le=1000
@@ -638,7 +638,7 @@ class NameResQuery(BaseModel):
     )
     limit: Optional[int] = Field(
         10,
-        description="The number of results to skip. Can be used to page through the results of a query.",
+        description="The number of results to return. Can be used to page through the results of a query.",
         # Limit should be greater than or equal to zero and less than or equal to 1000.
         ge=0,
         le=1000
