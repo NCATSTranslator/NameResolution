@@ -3,6 +3,7 @@ Name Resolver (Name Lookup, NameRes) API Endpoints
 
 Queries are mostly sent to the underlying the NameRes Solr instance.
 """
+import asyncio
 import json
 import logging
 import warnings
@@ -257,6 +258,13 @@ async def name_lookup(curies) -> Dict[str, Dict]:
 
     return output
 
+class ExactMatchMode(str, Enum):
+    """Controls exact-match behaviour in lookup queries."""
+    label    = "label"     # match against preferred_name_exactish only
+    synonyms = "synonyms"  # match against names_exactish only
+    any      = "any"       # match against either
+
+
 class LookupResult(BaseModel):
     curie:str
     label: str
@@ -326,12 +334,17 @@ async def lookup_curies_get(
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
             description="Provide debugging information on the Solr query as described in <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameters</a>."
-        )] = 'none'
+        )] = 'none',
+        exact: Annotated[Optional[ExactMatchMode], Query(
+            description="Exact-match mode: 'label' matches the preferred name only, "
+                        "'synonyms' matches any synonym, 'any' matches either. "
+                        "Omit for the default fuzzy search."
+        )] = None,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, exact)
 
 
 @app.post("/lookup",
@@ -390,12 +403,17 @@ async def lookup_curies_post(
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
             description="Provide debugging information on the Solr query as per <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameter</a>."
-        )] = 'none'
+        )] = 'none',
+        exact: Annotated[Optional[ExactMatchMode], Query(
+            description="Exact-match mode: 'label' matches the preferred name only, "
+                        "'synonyms' matches any synonym, 'any' matches either. "
+                        "Omit for the default fuzzy search."
+        )] = None,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, exact)
 
 
 async def lookup(string: str,
@@ -408,6 +426,7 @@ async def lookup(string: str,
            exclude_prefixes: str = "",
            only_taxa: str = "",
            debug: DebugOptions = 'none',
+           exact: Optional[ExactMatchMode] = None,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
@@ -518,32 +537,54 @@ async def lookup(string: str,
         # Rather than returning the explain as a string, return it as structured JSON.
         inner_params['debug.explain.structured'] = 'true'
 
-    params = {
-        "query": {
-            "edismax": {
-                "query": query,
-                # qf = query fields, i.e. how should we boost these fields if they contain the same fields as the input.
-                # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#qf-query-fields-parameter
-                "qf": "preferred_name_exactish^250 names_exactish^100 preferred_name^25 names^10",
-                # pf = phrase fields, i.e. how should we boost these fields if they contain the entire search phrase.
-                # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
-                "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^30 names^20",
-                # Boosts
-                "bq": [],
-                "boost": [
-                    # The boost is multiplied with score -- calculating the log() reduces how quickly this increases
-                    # the score for increasing clique identifier counts.
-                    "log(sum(clique_identifier_count, 1))"
-                ],
+    if exact:
+        # Exact mode: bypass eDisMax entirely and use a filter query against the *_exactish fields.
+        # Filter queries are cached by Solr, making repeated lookups of the same term very fast.
+        string_lc_escaped = string_lc.replace('\\', '\\\\').replace('"', '\\"')
+        if exact == ExactMatchMode.label:
+            filters.append(f'preferred_name_exactish:"{string_lc_escaped}"')
+        elif exact == ExactMatchMode.synonyms:
+            filters.append(f'names_exactish:"{string_lc_escaped}"')
+        else:  # ExactMatchMode.any
+            filters.append(
+                f'(preferred_name_exactish:"{string_lc_escaped}" OR names_exactish:"{string_lc_escaped}")'
+            )
+        params = {
+            "query": "*:*",
+            "filter": filters,
+            "sort": "clique_identifier_count DESC, curie_suffix ASC",
+            "limit": limit,
+            "offset": offset,
+            "fields": "*, score",
+            "params": inner_params,
+        }
+    else:
+        params = {
+            "query": {
+                "edismax": {
+                    "query": query,
+                    # qf = query fields, i.e. how should we boost these fields if they contain the same fields as the input.
+                    # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#qf-query-fields-parameter
+                    "qf": "preferred_name_exactish^250 names_exactish^100 preferred_name^25 names^10",
+                    # pf = phrase fields, i.e. how should we boost these fields if they contain the entire search phrase.
+                    # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
+                    "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^30 names^20",
+                    # Boosts
+                    "bq": [],
+                    "boost": [
+                        # The boost is multiplied with score -- calculating the log() reduces how quickly this increases
+                        # the score for increasing clique identifier counts.
+                        "log(sum(clique_identifier_count, 1))"
+                    ],
+                },
             },
-        },
-        "sort": "score DESC, clique_identifier_count DESC, curie_suffix ASC",
-        "limit": limit,
-        "offset": offset,
-        "filter": filters,
-        "fields": "*, score",
-        "params": inner_params,
-    }
+            "sort": "score DESC, clique_identifier_count DESC, curie_suffix ASC",
+            "limit": limit,
+            "offset": offset,
+            "filter": filters,
+            "fields": "*, score",
+            "params": inner_params,
+        }
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
     time_solr_start = time.time_ns()
@@ -619,7 +660,7 @@ async def lookup(string: str,
 
     time_end = time.time_ns()
     logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
-                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
+                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}, exact={exact}): "
                  f"took {(time_end - time_start)/1_000_000:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
     )
 
@@ -686,6 +727,12 @@ class NameResQuery(BaseModel):
         'none',
         description="Provide debugging information on the Solr query as per <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameter</a>."
     )
+    exact: Optional[ExactMatchMode] = Field(
+        None,
+        description="Exact-match mode: 'label' matches the preferred name only, "
+                    "'synonyms' matches any synonym, 'any' matches either. "
+                    "Omit (or null) for the default fuzzy search.",
+    )
 
 
 @app.post("/bulk-lookup",
@@ -698,9 +745,9 @@ class NameResQuery(BaseModel):
 )
 async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
     time_start = time.time_ns()
-    result = {}
-    for string in query.strings:
-        result[string] = await lookup(
+
+    async def do_lookup(string: str):
+        results = await lookup(
             string,
             query.autocomplete,
             query.highlighting,
@@ -710,7 +757,14 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             query.only_prefixes,
             query.exclude_prefixes,
             query.only_taxa,
-            query.debug)
+            query.debug,
+            query.exact,
+        )
+        return string, results
+
+    pairs = await asyncio.gather(*[do_lookup(s) for s in query.strings])
+    result = dict(pairs)
+
     time_end = time.time_ns()
     logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}): took {(time_end - time_start)/1_000_000:.2f}ms")
     return result
