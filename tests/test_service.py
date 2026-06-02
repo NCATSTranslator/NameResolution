@@ -260,3 +260,71 @@ def test_only_taxa_queries():
     results_ftd_disease_with_only_taxon = response.json()
     assert len(results_ftd_disease_with_only_taxon) == 1
     assert results_ftd_disease_with_only_taxon[0]['curie'] == 'MONDO:0010857'
+
+# HP:0001300 has preferred_name="parkinsonian disorder" and names=["Parkinsonian disease"].
+# The preferred_name is NOT in names, making it a good test case for label vs. synonyms exact mode.
+
+def test_exact_label_match():
+    client = TestClient(app)
+    # "parkinsonian disorder" is the preferred label for HP:0001300 — label mode should find it.
+    response = client.post("/lookup", params={'string': 'parkinsonian disorder', 'exact': 'label', 'limit': 100})
+    results = response.json()
+    curies = [r['curie'] for r in results]
+    assert 'HP:0001300' in curies
+
+    # "Parkinsonian disease" is only a synonym (names entry), not the preferred label — label mode should NOT find it.
+    response = client.post("/lookup", params={'string': 'Parkinsonian disease', 'exact': 'label', 'limit': 100})
+    results = response.json()
+    curies = [r['curie'] for r in results]
+    assert 'HP:0001300' not in curies
+
+
+def test_exact_synonyms_match():
+    client = TestClient(app)
+    # "Parkinsonian disease" is a synonym (names entry) for HP:0001300 — synonyms mode should find it.
+    response = client.post("/lookup", params={'string': 'Parkinsonian disease', 'exact': 'synonyms', 'limit': 100})
+    results = response.json()
+    curies = [r['curie'] for r in results]
+    assert 'HP:0001300' in curies
+
+    # "parkinsonian disorder" is the preferred_name but NOT in names for HP:0001300 — synonyms mode should NOT find it.
+    response = client.post("/lookup", params={'string': 'parkinsonian disorder', 'exact': 'synonyms', 'limit': 100})
+    results = response.json()
+    curies = [r['curie'] for r in results]
+    assert 'HP:0001300' not in curies
+
+
+def test_exact_any_match():
+    client = TestClient(app)
+    # exact=any should match on either the preferred label or a synonym.
+    response = client.post("/lookup", params={'string': 'parkinsonian disorder', 'exact': 'any', 'limit': 100})
+    curies = [r['curie'] for r in response.json()]
+    assert 'HP:0001300' in curies
+
+    response = client.post("/lookup", params={'string': 'Parkinsonian disease', 'exact': 'any', 'limit': 100})
+    curies = [r['curie'] for r in response.json()]
+    assert 'HP:0001300' in curies
+
+
+def test_exact_no_partial_match():
+    client = TestClient(app)
+    # "parkinson" is only a substring of known terms — exact mode must return no match for HP:0001300.
+    response = client.post("/lookup", params={'string': 'parkinson', 'exact': 'any', 'limit': 100})
+    curies = [r['curie'] for r in response.json()]
+    assert 'HP:0001300' not in curies
+
+
+def test_exact_bulk_lookup():
+    client = TestClient(app)
+    params = {
+        'strings': ['parkinsonian disorder', 'Parkinsonian disease', 'no match term xyz'],
+        'exact': 'any',
+        'limit': 10,
+    }
+    response = client.post("/bulk-lookup", json=params)
+    results = response.json()
+
+    assert set(results.keys()) == {'parkinsonian disorder', 'Parkinsonian disease', 'no match term xyz'}
+    assert 'HP:0001300' in [r['curie'] for r in results['parkinsonian disorder']]
+    assert 'HP:0001300' in [r['curie'] for r in results['Parkinsonian disease']]
+    assert results['no match term xyz'] == []
