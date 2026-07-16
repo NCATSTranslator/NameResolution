@@ -67,12 +67,14 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 COPY --chown=nru requirements.txt ${ROOT}
 RUN pip3 install -r requirements.txt
 
-# Copy necessary files.
+# Copy necessary files. The configset carries the Solr schema/config; the core is
+# created from it with `solr create -c name_lookup -d configsets/name_lookup`.
 COPY --chown=nru setup-and-load-solr.sh ${ROOT}
 COPY --chown=nru README.md ${ROOT}
 COPY --chown=nru Makefile ${ROOT}
+COPY --chown=nru configsets ${ROOT}/configsets
 
-# On entry, start the Solr instance.
+# On entry, start the Solr instance (standalone -- no ZooKeeper for a one-node load).
 ENV SOLR_EXEC="${ROOT}/solr/solr-${SOLR_VERSION}/bin/solr"
 ENV SOLR_DIR="$SOLR_DIR"
-ENTRYPOINT ${SOLR_EXEC} -cloud -f -p 8983 -m 64G -s ${SOLR_DIR}
+ENTRYPOINT ${SOLR_EXEC} start -f --user-managed -p 8983 -m 64G -s ${SOLR_DIR}
