@@ -16,11 +16,39 @@ def test_simple_check():
 
 
 def test_empty():
-    """ Checks that calling NameRes without an input string return an empty list. """
+    """ An empty (too-short) query on /lookup is rejected with HTTP 422. """
     client = TestClient(app)
     response = client.get("/lookup", params={'string':''})
-    syns = response.json()
-    assert len(syns) == 0
+    assert response.status_code == 422
+
+
+def test_minimum_query_length():
+    """
+    Queries shorter than config.minimum_query_length (default 2) are rejected on
+    /lookup with HTTP 422, but degrade to an empty list per-key on /bulk-lookup so
+    one short string doesn't fail the whole batch. The minimum is reported by /status.
+    """
+    client = TestClient(app)
+
+    # A single character on /lookup is too short -> 422.
+    response = client.get("/lookup", params={'string': 'a'})
+    assert response.status_code == 422
+
+    # A valid two-character query is not rejected (goes to Solr, returns a 200 list).
+    response = client.get("/lookup", params={'string': 'ab'})
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+    # On /bulk-lookup, a too-short string yields [] for its key; others resolve; request is 200.
+    response = client.post("/bulk-lookup", json={'strings': ['a', 'Parkinson'], 'limit': 100})
+    assert response.status_code == 200
+    results = response.json()
+    assert results['a'] == []
+    assert len(results['Parkinson']) == 34
+
+    # /status advertises the configured minimum under a nested config block.
+    response = client.get("/status")
+    assert response.json()['config'] == {'minimum_query_length': 2}
 
 
 def test_limit():

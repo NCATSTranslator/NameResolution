@@ -9,10 +9,11 @@ import warnings
 import time
 import os
 import re
+from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
 
-from fastapi import Body, FastAPI, Query
+from fastapi import Body, FastAPI, Query, HTTPException
 from fastapi.responses import RedirectResponse
 import httpx
 from pydantic import BaseModel, Field
@@ -20,8 +21,22 @@ from starlette.middleware.cors import CORSMiddleware
 
 from api.apidocs import get_app_info, construct_open_api_schema
 
-SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
-SOLR_PORT = os.getenv("SOLR_PORT", "8983")
+@dataclass(frozen=True)
+class Config:
+    """Runtime configuration, populated from environment variables at import."""
+    # Solr connection (private — not exposed via /status).
+    solr_host: str = os.getenv("SOLR_HOST", "localhost")
+    solr_port: str = os.getenv("SOLR_PORT", "8983")
+    # Queries shorter than this (after strip) are rejected: single-char queries
+    # are slow in Solr and never useful. Translator expects results at length 2.
+    minimum_query_length: int = int(os.getenv("NAMERES_MINIMUM_QUERY_LENGTH", "2"))
+
+    def public(self) -> dict:
+        """Config values safe to surface via /status. Infra config stays private."""
+        return {"minimum_query_length": self.minimum_query_length}
+
+
+config = Config()
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
@@ -57,7 +72,7 @@ async def status_get() -> Dict:
 
 async def status() -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
-    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
+    query_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/cores"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.get(query_url, params={
             'action': 'STATUS'
@@ -102,6 +117,7 @@ async def status() -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
+            'config': config.public(),
             'startTime': core['startTime'],
             'numDocs': index.get('numDocs', ''),
             'maxDoc': index.get('maxDoc', ''),
@@ -123,6 +139,7 @@ async def status() -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
+            'config': config.public(),
         }
 
 
@@ -219,7 +236,7 @@ async def synonyms_post(
 async def name_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
     time_start = time.time_ns()
-    query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
+    query = f"http://{config.solr_host}:{config.solr_port}/solr/name_lookup/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
         for curie in curies
@@ -263,11 +280,22 @@ class LookupResult(BaseModel):
                  "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>.</p>"
                  "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
      response_model=List[LookupResult],
+     responses={
+         422: {
+             "description": "The request was rejected without being searched. This includes queries shorter "
+                            "than the configured minimum length (see `minimum_query_length` in `/status`, "
+                            "default 2 characters after leading/trailing whitespace is stripped), since "
+                            "single-character queries are slow and never return useful results, as well as any "
+                            "other request parameter that failed validation."
+         }
+     },
      tags=["lookup"]
 )
 async def lookup_curies_get(
         string: Annotated[str, Query(
-            description="The string to search for."
+            description="The string to search for. Must be at least the configured minimum length "
+                        "(see `minimum_query_length` in `/status`, default 2) after leading/trailing "
+                        "whitespace is stripped; shorter queries are rejected with HTTP 422."
         )],
         autocomplete: Annotated[bool, Query(
             description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
@@ -318,7 +346,7 @@ async def lookup_curies_get(
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, raise_on_too_short=True)
 
 
 @app.post("/lookup",
@@ -327,11 +355,22 @@ async def lookup_curies_get(
                 "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>.</p>"
                 "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
     response_model=List[LookupResult],
+    responses={
+        422: {
+            "description": "The request was rejected without being searched. This includes queries shorter "
+                           "than the configured minimum length (see `minimum_query_length` in `/status`, "
+                           "default 2 characters after leading/trailing whitespace is stripped), since "
+                           "single-character queries are slow and never return useful results, as well as any "
+                           "other request parameter that failed validation."
+        }
+    },
     tags=["lookup"]
 )
 async def lookup_curies_post(
         string: Annotated[str, Query(
-            description="The string to search for."
+            description="The string to search for. Must be at least the configured minimum length "
+                        "(see `minimum_query_length` in `/status`, default 2) after leading/trailing "
+                        "whitespace is stripped; shorter queries are rejected with HTTP 422."
         )],
         autocomplete: Annotated[bool, Query(
             description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
@@ -382,7 +421,7 @@ async def lookup_curies_post(
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, raise_on_too_short=True)
 
 
 async def lookup(string: str,
@@ -395,6 +434,7 @@ async def lookup(string: str,
            exclude_prefixes: str = "",
            only_taxa: str = "",
            debug: DebugOptions = 'none',
+           raise_on_too_short: bool = False,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
@@ -421,8 +461,14 @@ async def lookup(string: str,
     # let's detect and replace just those characters.
     string_lc = re.sub(r"[“”]", '"', re.sub(r"[‘’]", "'", string_lc))
 
-    # Do we have a search string at all?
-    if string_lc == "":
+    # Is the query long enough to be worth searching? Single-character queries are
+    # slow in Solr and never return useful results (see config.minimum_query_length).
+    if len(string_lc) < config.minimum_query_length:
+        if raise_on_too_short:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Query string must be at least {config.minimum_query_length} character(s).",
+            )
         return []
 
     # For reasons I don't understand, we need to use backslash to escape characters (e.g. "\(") to remove the special
@@ -534,7 +580,7 @@ async def lookup(string: str,
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
     time_solr_start = time.time_ns()
-    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
+    query_url = f"http://{config.solr_host}:{config.solr_port}/solr/name_lookup/select"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
