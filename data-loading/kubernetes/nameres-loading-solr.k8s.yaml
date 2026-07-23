@@ -3,15 +3,16 @@
 # This is the Solr home (/var/solr): it holds the name_lookup core, which is the
 # index itself and, at the end, the thing that gets tarred into the backup.
 #
-# ## Why 600Gi for a ~130Gi index
+# ## Why 600Gi for a ~110-130Gi index
 #
 # Not padding. `optimize=true` merges everything into one segment by writing the new
 # segment before dropping the old ones, so peak usage during that step is roughly
 # double the finished index, and Lucene's guidance is to budget 2-3x.
 #
-# The finished index was ~127Gi for Babel 2025nov4. Newer releases are bigger, and
-# the sizing has to hold for the release actually being loaded (SYNONYMS_URL in the
-# Makefile), not the last one measured: at a 180Gi index, 3x is 540Gi and 400Gi would
+# Release size moves both ways: the finished index was ~127Gi for Babel 2025nov4 but
+# ~111Gi for 2026jul22 (fewer proteins). The sizing has to hold for whichever release
+# is actually being loaded (SYNONYMS_URL in the Makefile) and leave room for a larger
+# one, not track the last one measured: at a 180Gi index, 3x is 540Gi and 400Gi would
 # not be enough. The failure mode is the reason for the headroom -- running out of
 # space happens during the optimize, which is the *last* step of a multi-hour load,
 # and it takes the whole load with it.

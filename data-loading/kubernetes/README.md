@@ -143,9 +143,10 @@ Solr RSS against 111Gi of page cache (see `solr.resources` in the chart's
 **Disk space** is a floor, not a lever:
 
 - `/var/solr` needs **2-3x the finished index**, because `optimize=true` writes the
-  new single segment before deleting the old ones. It is 600Gi, sized for an index
-  well above the ~127Gi measured for Babel 2025nov4, because releases grow and running
-  out of room happens during the optimize -- the last step of a multi-hour load.
+  new single segment before deleting the old ones. It is 600Gi, sized well above the
+  finished index (~127Gi for Babel 2025nov4, ~111Gi for 2026jul22 -- release size
+  moves both ways) to leave room for a larger future one, because running out of room
+  happens during the optimize -- the last step of a multi-hour load.
 - `data/` needs the uncompressed synonyms plus the tarball. It no longer needs room
   for an uncompressed copy of the backup -- that staging step is gone.
 
