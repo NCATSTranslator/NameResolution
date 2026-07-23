@@ -63,9 +63,16 @@ def test_status_metrics_param():
         assert 'query_handler' in sm
         assert 'cache' in sm
         assert 'jvm' in sm
+        assert 'host' in sm
         assert 'requests' in sm['query_handler']
         assert 'hitratio' in sm['cache']
         assert 'heap_used_pct' in sm['jvm']
+        # GC and host resource fields drive Solr pod sizing decisions.
+        assert 'gc_count' in sm['jvm'] and 'gc_time_ms' in sm['jvm']
+        assert 'available_processors' in sm['host']
+        assert 'total_physical_mem_mb' in sm['host']
+        # errors/timeouts should be scalar counts (or None), not nested meter dicts.
+        assert not isinstance(sm['query_handler']['errors'], dict)
 
 
 def test_status_recent_queries_populated():

@@ -91,7 +91,8 @@ async def status(include_metrics: bool = False) -> Dict:
                     ('prefix', 'QUERY./select'),
                     ('prefix', 'CACHE.core.queryResultCache'),
                     ('prefix', 'memory.heap'),
-                    ('prefix', 'os.processCpuLoad'),
+                    ('prefix', 'gc.'),
+                    ('prefix', 'os.'),
                     ('wt', 'json'),
                 ])
                 if metrics_resp.status_code < 300:
@@ -103,14 +104,34 @@ async def status(include_metrics: bool = False) -> Dict:
                     core_data = next((v for k, v in all_metrics.items() if k.startswith('solr.core.')), {})
                     qh = core_data.get('QUERY./select.requestTimes', {})
                     cache = core_data.get('CACHE.core.queryResultCache', {})
-                    heap = all_metrics.get('solr.jvm', {}).get('memory.heap', {})
-                    cpu = all_metrics.get('solr.jvm', {}).get('os.processCpuLoad', None)
+
+                    # requests is a plain counter, but errors/timeouts are meters
+                    # ({count, meanRate, ...}); report just the cumulative count.
+                    def _count(metric):
+                        return metric.get('count') if isinstance(metric, dict) else metric
+                    jvm = all_metrics.get('solr.jvm', {})
+
+                    def _mb(n):
+                        return round(n / 1_048_576, 1) if isinstance(n, (int, float)) else None
+
+                    # Solr returns the heap gauge either nested ({'memory.heap': {'used':..}})
+                    # or flattened ('memory.heap.used'), depending on version. Support both.
+                    heap = jvm.get('memory.heap')
+                    if isinstance(heap, dict):
+                        heap_used, heap_max = heap.get('used'), heap.get('max')
+                    else:
+                        heap_used, heap_max = jvm.get('memory.heap.used'), jvm.get('memory.heap.max')
+
+                    # GC pause totals across whichever collectors are configured (G1, etc.).
+                    # High gc_time_ms relative to uptime points at heap pressure — a heap-sizing signal.
+                    gc_count = sum(v for k, v in jvm.items() if k.startswith('gc.') and k.endswith('.count'))
+                    gc_time_ms = sum(v for k, v in jvm.items() if k.startswith('gc.') and k.endswith('.time'))
 
                     solr_metrics = {
                         'query_handler': {
                             'requests': core_data.get('QUERY./select.requests'),
-                            'errors': core_data.get('QUERY./select.errors'),
-                            'timeouts': core_data.get('QUERY./select.timeouts'),
+                            'errors': _count(core_data.get('QUERY./select.errors')),
+                            'timeouts': _count(core_data.get('QUERY./select.timeouts')),
                             'mean_ms': qh.get('mean_ms'),
                             'p75_ms': qh.get('p75_ms'),
                             'p95_ms': qh.get('p95_ms'),
@@ -122,10 +143,24 @@ async def status(include_metrics: bool = False) -> Dict:
                             'size': cache.get('size'),
                         },
                         'jvm': {
-                            'heap_used_mb': round(heap.get('used', 0) / 1_048_576, 1) if 'used' in heap else None,
-                            'heap_max_mb': round(heap.get('max', 0) / 1_048_576, 1) if 'max' in heap else None,
-                            'heap_used_pct': round(heap.get('used', 0) / heap['max'] * 100, 1) if heap.get('max') else None,
-                            'cpu_load': cpu,
+                            'heap_used_mb': _mb(heap_used),
+                            'heap_max_mb': _mb(heap_max),
+                            'heap_used_pct': round(heap_used / heap_max * 100, 1) if heap_used is not None and heap_max else None,
+                            'cpu_load': jvm.get('os.processCpuLoad'),
+                            'gc_count': gc_count,
+                            'gc_time_ms': gc_time_ms,
+                        },
+                        # Host resources, for sizing the Solr pod's CPU/memory requests.
+                        # total/free physical memory sizes the pod: Solr mmaps the index, so
+                        # RAM beyond the heap becomes OS page cache for the (read-only) index.
+                        'host': {
+                            'available_processors': jvm.get('os.availableProcessors'),
+                            'system_load_average': jvm.get('os.systemLoadAverage'),
+                            'system_cpu_load': jvm.get('os.systemCpuLoad'),
+                            'total_physical_mem_mb': _mb(jvm.get('os.totalPhysicalMemorySize')),
+                            'free_physical_mem_mb': _mb(jvm.get('os.freePhysicalMemorySize')),
+                            'open_file_descriptors': jvm.get('os.openFileDescriptorCount'),
+                            'max_file_descriptors': jvm.get('os.maxFileDescriptorCount'),
                         },
                     }
             except Exception:
