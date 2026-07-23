@@ -363,11 +363,10 @@
             maxRamMB - the maximum amount of RAM (in MB) that this cache is allowed
                        to occupy
       -->
-    <!-- NameRes: grown from 512 (56% hit rate, 317K evictions in production) and
-         bounded by RAM rather than entry count. See NameResolution#266. -->
-    <queryResultCache size="4096"
-                      maxRamMB="512"
-                      initialSize="1024"
+    <!-- NameRes: grown from 512 entries (56% hit rate, 317K evictions in production).
+         Setting maxRamMB bounds the cache by RAM and makes size/initialSize ignored,
+         so they are not set here. See NameResolution#266. -->
+    <queryResultCache maxRamMB="512"
                       autowarmCount="0"/>
 
     <!-- Document Cache
@@ -912,8 +911,12 @@
   </updateProcessor>
   
 
-  <!-- The update.autoCreateFields property can be turned to false to disable schemaless mode -->
-  <updateRequestProcessorChain name="add-unknown-fields-to-the-schema" default="${update.autoCreateFields:true}"
+  <!-- NameRes: schemaless mode is off (the default below is false, where stock Solr
+       has true). Our schema is fixed and lives in managed-schema.xml; a Babel file with
+       an unexpected key should be a visible error, not a silently invented field.
+       This used to be set through configoverlay.json, but that file is rewritten by
+       Solr's Config API, which would give the schema a second source of truth. -->
+  <updateRequestProcessorChain name="add-unknown-fields-to-the-schema" default="${update.autoCreateFields:false}"
            processor="uuid,remove-blank,field-name-mutating,max-fields,parse-boolean,parse-long,parse-double,parse-date,add-schema-fields">
     <processor class="solr.LogUpdateProcessorFactory"/>
     <processor class="solr.DistributedUpdateProcessorFactory"/>
