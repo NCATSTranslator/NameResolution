@@ -104,8 +104,18 @@
          before flushing.
          If both ramBufferSizeMB and maxBufferedDocs is set, then
          Lucene will flush based on whichever limit is hit first.  -->
-    <!-- NameRes: large buffer to speed the bulk load (harmless for read-only serving). -->
-    <ramBufferSizeMB>512</ramBufferSizeMB>
+    <!-- NameRes: large buffer to speed the bulk load. Harmless for read-only serving,
+         where nothing indexes and so nothing is allocated; this is a budget, not a
+         reservation.
+
+         The budget is shared by all indexing threads, so what it really sets is how
+         big a segment grows before it is flushed: roughly this divided by the number
+         of concurrent uploads. At 2 GB and the 32 parallel uploads the Kubernetes
+         loader runs, that is ~64 MB a segment where 512 MB would have given ~16 MB,
+         so four times fewer segments for the merges to work through afterwards.
+         Comfortably inside the 31G load heap, and nowhere near Lucene's per-thread
+         hard limit (ramPerThreadHardLimitMB, 1945 MB). -->
+    <ramBufferSizeMB>2048</ramBufferSizeMB>
     <!-- <maxBufferedDocs>1000</maxBufferedDocs> -->
 
     <!-- Expert: ramPerThreadHardLimitMB sets the maximum amount of RAM that can be consumed

@@ -97,7 +97,7 @@ difference being throttled. If you need to override it, set `LOAD_PARALLELISM`.
 **Memory -- less than you would think.** `SOLR_MEM` (default `31G`) becomes
 `solr -m`, which sets *both* `-Xms` and `-Xmx`, so it is committed rather than a
 ceiling. Indexing does not want a large heap: Lucene buffers documents in
-`ramBufferSizeMB` (512 MB, in the configset) and streams merges through the OS page
+`ramBufferSizeMB` (2 GB, in the configset) and streams merges through the OS page
 cache, so heap past a few GB is memory taken away from that cache. Staying under 32G
 also keeps compressed object pointers, which a bigger heap silently gives up. The
 pod's remaining memory is not wasted -- the kernel uses it to cache index files, and
@@ -182,5 +182,5 @@ the pod spec (the Makefile uses `?=`).
 | `SOLR_MEM` | `31G` | Solr's heap during the load (`-Xms` and `-Xmx`). |
 | `LOAD_PARALLELISM` | CPU limit | Concurrent uploads. Only set this to override the cgroup-derived default. |
 | `SPLIT_SIZE` / `SPLIT_LINES` | `2G` / 10M | How the big synonym files are split. More, smaller chunks give the parallel loader a shorter tail at the end of the run; fewer, larger ones mean less `split` time up front. |
-| `ramBufferSizeMB` | 512 (in the configset) | Not an environment variable -- it lives in `solrconfig.xml`. With many parallel uploads, Lucene flushes a segment per indexing thread, so a bigger buffer means fewer and larger segments and less merging afterwards. Worth trying at 1-2G if the Grafana disk panels show the run still merging long after the uploads finish; there is heap to spare for it. |
+| `ramBufferSizeMB` | 2048 (in the configset) | Not an environment variable -- it lives in `solrconfig.xml`. It is a budget shared across indexing threads, so the segment size at flush is roughly this divided by the number of concurrent uploads: ~64 MB at 32 uploads. Raise it further if the Grafana disk panels show the run still merging long after the uploads have finished; there is heap to spare. |
 | `SOLR_STARTUP_TRIES` | 60 | How long the loader waits for Solr (3s each) before giving up. |
