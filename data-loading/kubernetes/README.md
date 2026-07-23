@@ -49,6 +49,25 @@ $ make all SYNONYMS_URL=https://stars.renci.org/var/babel_outputs/<release>/syno
 $ make data/backup.done
 ```
 
+### Check you have the image you think you have
+
+The Makefile, the loader script and the configset are all **baked into the image**.
+Editing them in a checkout does nothing; the `image:` tag in the pod spec is what
+decides which version of the pipeline actually runs. The publish workflow only tags
+`latest` on a published release, so between merging a change and cutting a release,
+`latest` is the *previous* pipeline. Before starting an eight-hour load:
+
+```shell
+$ ls available-cpus.sh                                       # missing => pre-2026-07 image
+$ grep ramBufferSizeMB configsets/name_lookup/conf/solrconfig.xml
+$ grep '^SOLR_MEM' Makefile
+```
+
+If the image is close enough but one setting is stale, you can edit these files
+inside the pod before running `make`. The configset in particular is only read when
+the core is created, so changing `solrconfig.xml` before `make all` takes full
+effect.
+
 `make all` downloads and splits the synonym files, starts Solr, creates the
 `name_lookup` core from the checked-in configset and loads it. `make
 data/backup.done` optimizes the index, stops Solr and writes
