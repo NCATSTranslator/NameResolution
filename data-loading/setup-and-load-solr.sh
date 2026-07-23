@@ -10,9 +10,14 @@
 # commit is issued at the end. There is no per-file commit and no sleeping.
 #
 # Safety: because the load is parallel and the data is huge, we count the input
-# documents (lines) before loading and compare against Solr's document count
-# afterwards. Any failed upload (curl --fail) or a count mismatch aborts with a
-# non-zero exit code, so a partial/dropped load cannot pass silently.
+# documents (lines) before loading and compare against the *increase* in Solr's
+# document count afterwards. Any failed upload (curl --fail) or a count mismatch
+# aborts with a non-zero exit code, so a partial/dropped load cannot pass silently.
+#
+# The count is the important half of that: Solr rejects some bad input outright
+# (an unknown field is a 400, which --fail catches), but it answers 200 and
+# indexes nothing for other junk -- a file of plain text, for instance. Only the
+# count notices that.
 
 set -uo pipefail
 
@@ -20,37 +25,75 @@ set -uo pipefail
 SOLR_SERVER="${SOLR_SERVER:-http://localhost:8983}"
 CORE="${SOLR_CORE:-name_lookup}"
 PARALLELISM="${LOAD_PARALLELISM:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+# How long to wait for Solr to come up, in 3-second increments.
+STARTUP_TRIES="${SOLR_STARTUP_TRIES:-60}"
 
 GLOB="${1:?usage: setup-and-load-solr.sh \"data/synonyms/*.txt*\" (quote the glob!)}"
 
-# Step 1. Wait for the core to be available.
-until curl -sf "${SOLR_SERVER}/solr/${CORE}/admin/ping" >/dev/null 2>&1; do
+# Number of documents currently in the core.
+solr_count() {
+  curl -sf "${SOLR_SERVER}/solr/${CORE}/query?q=*:*&rows=0" \
+    | grep -oE '"numFound":[0-9]+' | head -1 | grep -oE '[0-9]+'
+}
+
+# Step 1. Wait for the core to be available (bounded: a Solr that never comes up
+# should fail the build, not hang it).
+ready=""
+for _ in $(seq "${STARTUP_TRIES}"); do
+  if curl -sf "${SOLR_SERVER}/solr/${CORE}/admin/ping" >/dev/null 2>&1; then
+    ready="yes"
+    break
+  fi
   echo "  -- Solr core '${CORE}' is unavailable - sleeping"
   sleep 3
 done
+if [ -z "$ready" ]; then
+  echo "Solr core '${CORE}' at ${SOLR_SERVER} did not come up after $((STARTUP_TRIES * 3))s. Aborting." >&2
+  exit 1
+fi
 echo "Solr core '${CORE}' is up at ${SOLR_SERVER}."
 
 # Step 2. Expand the glob and count the input documents (one JSON doc per line).
-# `grep -c ''` counts every line including a final one with no trailing newline,
-# and we count per file so a missing newline never merges two files' records.
+# Emptying IFS stops the shell from splitting the glob on spaces, so filenames
+# containing spaces survive; pathname expansion still yields one word per file.
+saved_ifs="$IFS"
+IFS=
 shopt -s nullglob
 files=( $GLOB )
+shopt -u nullglob
+IFS="$saved_ifs"
 if [ ${#files[@]} -eq 0 ]; then
   echo "No files matched '${GLOB}'." >&2
   exit 1
 fi
+# `grep -c '[^[:space:]]'` counts every non-blank line, including a final one with
+# no trailing newline. Blank lines are skipped because Solr ignores them, and we
+# count per file so a missing newline never merges two files' records. This assumes
+# one document per line -- pretty-printed JSON would be counted wrong.
 echo "Counting documents in ${#files[@]} file(s)..."
 expected=0
 for f in "${files[@]}"; do
-  n=$(grep -c '' "$f")
+  n=$(grep -c '[^[:space:]]' "$f")
   echo "  ${n} docs in ${f}"
   expected=$((expected + n))
 done
-echo "Expecting ${expected} documents in total."
+echo "Expecting to add ${expected} documents in total."
+
+# The core may already contain documents (every load assigns fresh UUIDs, so
+# loading is additive, never idempotent). Compare the delta, not the total.
+before=$(solr_count)
+if [ -z "${before}" ]; then
+  echo "Could not read the current document count from Solr. Aborting." >&2
+  exit 1
+fi
+if [ "${before}" -ne 0 ]; then
+  echo "NOTE: core '${CORE}' already contains ${before} documents; this load adds to them."
+fi
 
 # Step 3. Load the files in parallel, streaming each one, without committing.
 # curl -T streams the file rather than buffering it in memory (issue #194), and
-# --fail turns any HTTP >=400 (e.g. malformed JSON) into a non-zero exit.
+# --fail turns any HTTP >=400 (e.g. an unknown field) into a non-zero exit. Input
+# that Solr accepts but does not index is caught by the count check in step 5.
 load_one() {
   local f="$1"
   echo "Loading ${f}..."
@@ -74,12 +117,12 @@ echo "Committing..."
 curl -sf --show-error "${SOLR_SERVER}/solr/${CORE}/update?commit=true" >/dev/null \
   || { echo "Commit failed." >&2; exit 1; }
 
-# Step 5. Verify the document count matches.
-actual=$(curl -sf "${SOLR_SERVER}/solr/${CORE}/query?q=*:*&rows=0" \
-  | grep -oE '"numFound":[0-9]+' | head -1 | grep -oE '[0-9]+')
-echo "Solr reports ${actual} documents; expected ${expected}."
-if [ "${actual:-0}" != "${expected}" ]; then
-  echo "DOCUMENT COUNT MISMATCH: loaded ${actual}, expected ${expected}. Aborting." >&2
+# Step 5. Verify that the number of documents added matches the input.
+after=$(solr_count)
+added=$(( ${after:-0} - before ))
+echo "Solr reports ${after:-0} documents (${added} added); expected to add ${expected}."
+if [ "${added}" != "${expected}" ]; then
+  echo "DOCUMENT COUNT MISMATCH: added ${added}, expected ${expected}. Aborting." >&2
   exit 1
 fi
-echo "Load complete: ${actual} documents."
+echo "Load complete: ${after} documents in '${CORE}'."
