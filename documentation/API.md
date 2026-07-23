@@ -335,6 +335,7 @@ Solr database.
   "lastModified": "2025-09-24T19:09:56.524Z",
   "size": "142.17 GB",
   "recent_queries": {
+    "max": 1000,
     "count": 1000,
     "mean_time_ms": 42.3,
     "mean_solr_time_ms": 38.1
@@ -364,6 +365,6 @@ Solr database.
 }
 ```
 
-`recent_queries` tracks the last 1000 `/lookup` queries handled by this NameRes instance (configurable via the `RECENT_TIMES_COUNT` environment variable). `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. Both fields are `null` if no queries have been handled since startup.
+`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `max` is the size of the tracking window (default 1000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `count` is how many queries have actually been recorded so far. `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. Both means are `null` if no queries have been handled since startup.
 
-`solr_metrics` is only included when the `?metrics=true` query parameter is passed, as fetching it requires an additional round-trip to Solr. It is populated directly from Solr's `/admin/metrics` API and provides native Solr health indicators: cumulative query handler statistics (useful for detecting errors or timeouts), queryResultCache hit ratio (a low ratio indicates memory pressure or cache thrashing), and JVM heap/CPU metrics. This field is `null` within the response if the Solr metrics API is unavailable.
+`solr_metrics` is only populated when the `?metrics=true` query parameter is passed, as fetching it requires an additional round-trip to Solr. Otherwise the field holds a short `{"message": ...}` placeholder rather than the metrics shown above. When requested, it is populated directly from Solr's `/admin/metrics` API and provides native Solr health indicators: cumulative query handler statistics (useful for detecting errors or timeouts), queryResultCache hit ratio (a low ratio indicates memory pressure or cache thrashing), and JVM heap/CPU metrics. If the Solr metrics API is unavailable, the placeholder message is retained.
