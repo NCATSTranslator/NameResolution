@@ -23,11 +23,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Run Solr (standalone)
-        run: docker run --name name_lookup -d -p 8983:8983 solr:9.10.0
+        run: docker run --name name_lookup -d -p 8983:8983 solr:9.10
 
       - name: Create the name_lookup core from the checked-in configset
         run: |
-          until curl -sf http://localhost:8983/solr/admin/cores?action=STATUS >/dev/null; do sleep 2; done
+          for _ in $(seq 60); do
+            curl -sf 'http://localhost:8983/solr/admin/cores?action=STATUS' > /dev/null && break
+            sleep 2
+          done
+          curl -sf 'http://localhost:8983/solr/admin/cores?action=STATUS' > /dev/null \
+            || { echo "Solr did not come up:"; docker logs name_lookup; exit 1; }
           docker cp data-loading/configsets/name_lookup name_lookup:/tmp/name_lookup
           docker exec name_lookup solr create -c name_lookup -d /tmp/name_lookup
 
@@ -44,3 +49,38 @@ jobs:
       - name: Run the tests
         run: |
           python -m pytest tests/
+
+      # The loader's guard is what stands between us and a silently half-loaded
+      # 130 GB index, so check that a bad file actually stops it.
+      - name: The loader must abort on a file that does not load
+        run: |
+          echo 'this is not json' > /tmp/malformed.json
+          if ./data-loading/setup-and-load-solr.sh /tmp/malformed.json; then
+            echo "Expected the loader to fail on a malformed file, but it succeeded."
+            exit 1
+          fi
+          echo "Loader aborted as expected."
+
+      # The backup is the actual product of data-loading/, so check that a core can be
+      # tarred up, dropped into a fresh Solr, and served without any restore-time setup.
+      - name: Verify the backup roundtrip (tar the core, restore it into a fresh Solr)
+        run: |
+          docker exec name_lookup tar -C /var/solr/data -cf - name_lookup > snapshot.backup.tar
+          docker run --name name_lookup_restored -d -p 8984:8983 solr:9.10
+          for _ in $(seq 60); do
+            curl -sf 'http://localhost:8984/solr/admin/cores?action=STATUS' > /dev/null && break
+            sleep 2
+          done
+          docker cp snapshot.backup.tar name_lookup_restored:/tmp/snapshot.backup.tar
+          docker exec -u root name_lookup_restored tar -C /var/solr/data -xf /tmp/snapshot.backup.tar
+          docker exec -u root name_lookup_restored chown -R solr:solr /var/solr/data/name_lookup
+          docker restart name_lookup_restored
+          for _ in $(seq 60); do
+            curl -sf 'http://localhost:8984/solr/name_lookup/admin/ping' > /dev/null && break
+            sleep 2
+          done
+          count=$(curl -sf 'http://localhost:8984/solr/name_lookup/query?q=*:*&rows=0' \
+            | grep -oE '"numFound":[0-9]+' | head -1 | grep -oE '[0-9]+')
+          expected=$(grep -c '[^[:space:]]' tests/data/test-synonyms.json)
+          echo "Restored core reports ${count:-0} documents; expected ${expected}."
+          [ "${count:-0}" = "${expected}" ]
