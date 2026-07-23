@@ -76,6 +76,7 @@ RUN pip3 install -r requirements.txt
 # Copy necessary files. The configset carries the Solr schema/config; the core is
 # created from it with `solr create -c name_lookup -d configsets/name_lookup`.
 COPY --chown=nru setup-and-load-solr.sh ${ROOT}
+COPY --chown=nru available-cpus.sh ${ROOT}
 COPY --chown=nru README.md ${ROOT}
 COPY --chown=nru Makefile ${ROOT}
 COPY --chown=nru configsets ${ROOT}/configsets

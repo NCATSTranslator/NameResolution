@@ -10,18 +10,31 @@
 # Recipes below use pipefail, which /bin/sh (dash on Debian) does not support.
 SHELL := /bin/bash
 
-# Configuration
-SYNONYMS_URL=https://stars.renci.org/var/babel_outputs/2025sep1/synonyms/
+# Configuration. These use ?= so that they can be overridden from the environment
+# (e.g. from a Kubernetes pod spec) without editing this file.
+SYNONYMS_URL ?= https://stars.renci.org/var/babel_outputs/2025sep1/synonyms/
 
-# How much memory should Solr use during the load. This is the heap of the
-# *loading* Solr on a large build machine, not of the Solr that serves queries --
-# serving wants a small heap so the OS page cache can hold the index instead.
-SOLR_MEM=220G
+# Solr's heap during the load. `solr -m` sets BOTH -Xms and -Xmx, so this is
+# committed, not just a ceiling.
+#
+# Indexing does not want a big heap: Lucene buffers documents in ramBufferSizeMB
+# (512 MB, set in the configset) and streams merges through the OS page cache, so
+# heap beyond a few GB is memory taken away from that cache. Staying under 32G also
+# keeps compressed object pointers, which a larger heap silently gives up.
+# See data-loading/kubernetes/README.md for how to check this against Grafana.
+SOLR_MEM ?= 31G
+
+# How many CPUs we may actually use -- the cgroup limit in a container, not the
+# node's core count. Used for the parallel compress below; setup-and-load-solr.sh
+# works this out for itself.
+NCPU := $(shell bash ./available-cpus.sh 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 
 # A 130 GB Lucene index is already largely compressed, and gzip is single-threaded,
 # so compressing the backup with gzip takes hours for a few percent. Use pigz
-# (parallel gzip, same format) when it is available.
-GZIP_CMD := $(shell command -v pigz > /dev/null 2>&1 && echo pigz || echo gzip)
+# (parallel gzip, same format) when it is available. -p keeps pigz inside our CPU
+# quota; left alone it starts one thread per *node* core and spends the difference
+# being throttled.
+GZIP_CMD := $(shell command -v pigz > /dev/null 2>&1 && echo "pigz -p $(NCPU)" || echo gzip)
 
 # The checked-in configset used to create the core (contains conf/).
 CONFIGSET=configsets/name_lookup
@@ -32,8 +45,8 @@ CORE=name_lookup
 # Split any synonym file larger than SPLIT_SIZE into chunks of SPLIT_LINES lines.
 # Splitting only helps parallelism, so we only bother with the big files; JSON is
 # one document per line, so we must split on line boundaries, never on bytes.
-SPLIT_SIZE=2G
-SPLIT_LINES=10000000
+SPLIT_SIZE ?= 2G
+SPLIT_LINES ?= 10000000
 
 # SOLR_DIR should be set up to point to the Solr data directory (usually /var/solr,
 # which is also the Solr home) and SOLR_EXEC should be set up to point to the Solr

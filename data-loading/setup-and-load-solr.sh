@@ -21,10 +21,15 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # Configuration (overridable from the environment).
 SOLR_SERVER="${SOLR_SERVER:-http://localhost:8983}"
 CORE="${SOLR_CORE:-name_lookup}"
-PARALLELISM="${LOAD_PARALLELISM:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+# available-cpus.sh reads the cgroup quota, so in a container this is the pod's CPU
+# limit rather than the node's core count. See data-loading/kubernetes/README.md.
+PARALLELISM="${LOAD_PARALLELISM:-$(bash "${SCRIPT_DIR}/available-cpus.sh" 2>/dev/null \
+  || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 # How long to wait for Solr to come up, in 3-second increments.
 STARTUP_TRIES="${SOLR_STARTUP_TRIES:-60}"
 
@@ -51,7 +56,7 @@ if [ -z "$ready" ]; then
   echo "Solr core '${CORE}' at ${SOLR_SERVER} did not come up after $((STARTUP_TRIES * 3))s. Aborting." >&2
   exit 1
 fi
-echo "Solr core '${CORE}' is up at ${SOLR_SERVER}."
+echo "Solr core '${CORE}' is up at ${SOLR_SERVER}; loading with ${PARALLELISM} parallel uploads."
 
 # Step 2. Expand the glob and count the input documents (one JSON doc per line).
 # Emptying IFS stops the shell from splitting the glob on spaces, so filenames
