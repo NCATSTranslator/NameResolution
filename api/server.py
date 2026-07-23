@@ -46,6 +46,10 @@ RECENT_TIMES_COUNT = int(os.getenv("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_CO
 recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
 recent_solr_times = deque(maxlen=RECENT_TIMES_COUNT)
 
+# Lookups slower than this (end-to-end, in ms) are logged at WARNING instead of INFO,
+# so slow queries stand out in the logs. See documentation/Performance.md.
+SLOW_QUERY_THRESHOLD_MS = float(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
+
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
 @app.get("/", include_in_schema=False)
@@ -90,6 +94,7 @@ async def status(full: bool = False) -> Dict:
                     ('group', 'core'),
                     ('group', 'jvm'),
                     ('prefix', 'QUERY./select'),
+                    ('prefix', 'CACHE.core.filterCache'),
                     ('prefix', 'CACHE.core.queryResultCache'),
                     ('prefix', 'memory.heap'),
                     ('prefix', 'gc.'),
@@ -104,12 +109,23 @@ async def status(full: bool = False) -> Dict:
                     # on older cloud backups). Grab whichever one is present.
                     core_data = next((v for k, v in all_metrics.items() if k.startswith('solr.core.')), {})
                     qh = core_data.get('QUERY./select.requestTimes', {})
-                    cache = core_data.get('CACHE.core.queryResultCache', {})
 
                     # requests is a plain counter, but errors/timeouts are meters
                     # ({count, meanRate, ...}); report just the cumulative count.
                     def _count(metric):
                         return metric.get('count') if isinstance(metric, dict) else metric
+
+                    # NameRes leans on fq (prefix/type/taxon filters), so filterCache matters
+                    # as much as queryResultCache. Rising evictions => cache too small.
+                    def _cache(name):
+                        c = core_data.get(f'CACHE.core.{name}', {})
+                        return {
+                            'hitratio': c.get('hitratio'),
+                            'lookups': c.get('lookups'),
+                            'hits': c.get('hits'),
+                            'evictions': c.get('evictions'),
+                            'size': c.get('size'),
+                        }
                     jvm = all_metrics.get('solr.jvm', {})
 
                     def _mb(n):
@@ -139,9 +155,8 @@ async def status(full: bool = False) -> Dict:
                             'p99_ms': qh.get('p99_ms'),
                         },
                         'cache': {
-                            'hitratio': cache.get('hitratio'),
-                            'evictions': cache.get('evictions'),
-                            'size': cache.get('size'),
+                            'filterCache': _cache('filterCache'),
+                            'queryResultCache': _cache('queryResultCache'),
                         },
                         'jvm': {
                             'heap_used_mb': _mb(heap_used),
@@ -733,10 +748,13 @@ async def lookup(string: str,
     time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
     recent_query_times.append(time_taken_ms)
     recent_solr_times.append(time_taken_ms_solr)
-    logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
-                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
-                 f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms waiting for Solr)"
-    )
+    log_msg = (f"Lookup query to Solr for {json.dumps(string)} " +
+               f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
+               f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms waiting for Solr)")
+    if time_taken_ms > SLOW_QUERY_THRESHOLD_MS:
+        logger.warning("SLOW QUERY: " + log_msg)
+    else:
+        logger.info(log_msg)
 
     return outputs
 

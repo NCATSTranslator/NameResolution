@@ -65,7 +65,8 @@ def test_status_metrics_param():
         assert 'jvm' in sm
         assert 'host' in sm
         assert 'requests' in sm['query_handler']
-        assert 'hitratio' in sm['cache']
+        assert 'filterCache' in sm['cache'] and 'queryResultCache' in sm['cache']
+        assert 'hitratio' in sm['cache']['filterCache']
         assert 'heap_used_pct' in sm['jvm']
         # GC and host resource fields drive Solr pod sizing decisions.
         assert 'gc_count' in sm['jvm'] and 'gc_time_ms' in sm['jvm']
