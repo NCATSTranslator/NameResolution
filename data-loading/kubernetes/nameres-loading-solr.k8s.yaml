@@ -1,7 +1,17 @@
 # Kubernetes file for setting up a PVC to use for nameres-loading.
-# 
-# As of 2022dec11, this seems to come to 37G for files + 30G for snapshot.backup.
-# I'm going to set the size to 150Gi so we have a bit of spare space if needed.
+#
+# This is the Solr home (/var/solr): it holds the name_lookup core, which is the
+# index itself and, at the end, the thing that gets tarred into the backup.
+#
+# Size it at 3x the finished index, not 1x. `optimize=true` merges everything into
+# one segment by writing the new segment before dropping the old ones, so peak usage
+# during that step is roughly double the index, and Lucene's own guidance is to
+# budget 2-3x. As of Babel 2025nov4 the index is ~127Gi, so 400Gi is about 3x and
+# still the right order of magnitude -- but if the index passes ~140Gi, raise this.
+#
+# storageClassName is worth a thought: this volume takes the whole write load of the
+# indexing run plus the read+write of the optimize, so a faster class here shortens
+# the load more reliably than any tuning in the Makefile. See README.md.
 
 apiVersion: v1
 kind: PersistentVolumeClaim

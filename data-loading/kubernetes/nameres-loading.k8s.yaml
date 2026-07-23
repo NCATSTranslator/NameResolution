@@ -1,4 +1,9 @@
-# Kubernetes file for Nameres-loading
+# Kubernetes file for Nameres-loading.
+#
+# This pod is a workspace, not a job: it starts, does nothing, and waits for you to
+# exec in and drive the load by hand (see README.md in this directory). The command
+# below deliberately replaces the image's entrypoint, which would otherwise start a
+# Solr of its own -- the Makefile starts Solr itself, using SOLR_MEM as its heap.
 
 apiVersion: v1
 kind: Pod
@@ -12,9 +17,8 @@ spec:
   - name: nameres-loading
     image: ghcr.io/ncatstranslator/nameresolution-data-loading:latest
     imagePullPolicy: Always
-    # I just need something to run while I figure out how to make this work
-    command: [ "/bin/bash", "-c", "--" ]
-    args: [ "while true; echo Running; do sleep 30; done;" ]
+    # Idle until someone execs in. `make all` is run by hand, not by the pod.
+    command: ["sleep", "infinity"]
     ports:
     - containerPort: 8983
     volumeMounts:
@@ -22,15 +26,29 @@ spec:
       name: nameres-loading-solr
     - mountPath: "/code/nameres-data-loading/data"
       name: nameres-loading-data
+    # Sized for the parallel loader. The load is CPU-bound (Solr analyses every
+    # synonym on the way in), then I/O-bound (merges and the final optimize), so CPU
+    # and disk speed are the levers; memory beyond the heap only helps as page cache.
+    # requests == limits keeps this Guaranteed: a load runs for hours and should not
+    # be evicted halfway through.
+    #
+    # The loader reads the CPU *limit* out of the cgroup and runs that many parallel
+    # uploads, and pigz is given the same number, so raising cpu here is picked up
+    # automatically -- there is no separate parallelism setting to remember.
+    #
+    # Memory: SOLR_MEM (31G by default) is the heap; the rest is JVM overhead and
+    # page cache for merges. This used to be 220G/256G with a 220G heap, which spent
+    # almost all of it in the one place a large heap does not help. See README.md
+    # before changing either number.
     resources:
       requests:
         ephemeral-storage: "1G"
-        memory: "220G"
-        cpu: "6"
+        memory: "96Gi"
+        cpu: "16"
       limits:
         ephemeral-storage: "1G"
-        memory: "256G"
-        cpu: "8"
+        memory: "96Gi"
+        cpu: "16"
   volumes:
     - name: nameres-loading-solr
       persistentVolumeClaim:

@@ -1,13 +1,18 @@
-# Kubernetes file for setting up a PVC to use for nameres-Loading.
-# nameres-loading-data is a directory for storing synonym files,
-# the generated Solr back and its compressed version.
+# Kubernetes file for setting up a PVC to use for nameres-loading.
+# nameres-loading-data is the working directory (data/): the downloaded synonym
+# files and the finished backup tarball.
 #
-# As of 2023jun1, this directory needs to contain:
-# - 129G of synonym files (in JSON)
-# - 119G of snapshot.backup files moved here from Solr
-# - 85G of snapshot.backup.tar.gz after compressing
-# Therefore it needs to be a minimum of 350G. I'm going to set a
-# size of 400G in case we need some extra space.
+# It needs to hold, at once:
+# - the uncompressed synonym files (129G as of Babel 2023jun1; check the file sizes
+#   in the SYNONYMS_URL directory listing for the release you are actually loading)
+# - snapshot.backup.tar.gz (85G as of 2023jun1)
+#
+# It no longer needs room for an uncompressed copy of the backup. The old pipeline
+# moved a ~119G snapshot.backup directory here before compressing it; the backup is
+# now tarred straight out of the Solr volume into the tarball, which also means the
+# two volumes are read and written in parallel rather than one after the other.
+#
+# 500Gi therefore leaves comfortable headroom for a couple of Babel releases' growth.
 
 apiVersion: v1
 kind: PersistentVolumeClaim
