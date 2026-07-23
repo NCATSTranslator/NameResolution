@@ -83,8 +83,14 @@
 
     <!-- Grown from 512 entries (56% hit rate, 317K evictions in production). Setting
          maxRamMB bounds the cache by RAM and makes size/initialSize ignored, so they
-         are not set here. See NameResolution#266. -->
-    <queryResultCache maxRamMB="512" autowarmCount="0"/>
+         are not set here. See NameResolution#266.
+
+         class is pinned because maxRamMB is a CaffeineCache feature. CaffeineCache is
+         Solr's default today, but if a later release changed that default to an impl
+         without RAM accounting, maxRamMB would be silently ignored and this cache
+         would grow unbounded. The size-based caches above do not pin it, since an
+         entry count is honoured by any cache implementation. -->
+    <queryResultCache class="solr.CaffeineCache" maxRamMB="512" autowarmCount="0"/>
 
     <documentCache size="512" initialSize="512" autowarmCount="0"/>
 
