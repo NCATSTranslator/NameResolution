@@ -45,15 +45,19 @@ spec:
     # page cache for merges. This used to be 220G/256G with a 220G heap, which spent
     # almost all of it in the one place a large heap does not help. See README.md
     # before changing either number.
+    #
+    # These have to fit on ONE node, which is a stricter test than the namespace
+    # quota -- and the same node has to have the NVMe volume free. Check node
+    # capacity before raising them, not just what the namespace has left.
     resources:
       requests:
         ephemeral-storage: "1G"
-        memory: "96Gi"
-        cpu: "16"
+        memory: "128Gi"
+        cpu: "32"
       limits:
         ephemeral-storage: "1G"
-        memory: "96Gi"
-        cpu: "16"
+        memory: "128Gi"
+        cpu: "32"
   # The image runs as nru, uid/gid 1000. fsGroup makes the kubelet hand the NVMe
   # volume over to that group; without it the volume is root-owned and Solr cannot
   # write a thing. runAsUser only restates what the image already does.

@@ -84,7 +84,11 @@ nothing but the absence of failure.
 
 **CPU -- the main lever, and the one to try first.** The loader runs one upload per
 CPU and `pigz` gets the same number, so raising `cpu` in the pod spec is picked up
-automatically; there is no second setting to keep in sync. Note that both numbers
+automatically; there is no second setting to keep in sync. The pod asks for 32,
+which is deliberately short of what the namespace has spare: the real limit is that
+the request has to fit on a **single node**, with the NVMe volume, at the same time.
+Namespace quota is the easy test to pass and the wrong one to plan against -- check
+`kubectl describe node` before raising this. Note that both numbers
 come from the cgroup *limit* via [`../available-cpus.sh`](../available-cpus.sh), not
 from `nproc`: inside a container `nproc` reports the node's cores, so on a 64-core
 node a pod limited to 8 CPUs would otherwise start 64 uploads and spend the
@@ -178,4 +182,5 @@ the pod spec (the Makefile uses `?=`).
 | `SOLR_MEM` | `31G` | Solr's heap during the load (`-Xms` and `-Xmx`). |
 | `LOAD_PARALLELISM` | CPU limit | Concurrent uploads. Only set this to override the cgroup-derived default. |
 | `SPLIT_SIZE` / `SPLIT_LINES` | `2G` / 10M | How the big synonym files are split. More, smaller chunks give the parallel loader a shorter tail at the end of the run; fewer, larger ones mean less `split` time up front. |
+| `ramBufferSizeMB` | 512 (in the configset) | Not an environment variable -- it lives in `solrconfig.xml`. With many parallel uploads, Lucene flushes a segment per indexing thread, so a bigger buffer means fewer and larger segments and less merging afterwards. Worth trying at 1-2G if the Grafana disk panels show the run still merging long after the uploads finish; there is heap to spare for it. |
 | `SOLR_STARTUP_TRIES` | 60 | How long the loader waits for Solr (3s each) before giving up. |
