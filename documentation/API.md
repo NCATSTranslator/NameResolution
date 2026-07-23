@@ -122,7 +122,7 @@ Search for cliques by a fragment of a name or synonym.
 - `autocomplete` (optional, boolean, default: false): If `true`, treats the input string as incomplete and looks for terms that start with the final word. If `false`, treats the entire phrase as complete (entity linker mode).
 - `highlighting` (optional, boolean, default: false): If `true`, returns information on which labels and synonyms matched the search query.
 - `offset` (optional, integer, default: 0, minimum: 0): The number of results to skip. Used for pagination.
-- `limit` (optional, integer, default: 10, minimum: 0, maximum: 1000): The maximum number of results to return. Used for pagination.
+- `limit` (optional, integer, default: 10, minimum: 0, maximum: 1000): The number of results to return. Used for pagination.
 - `biolink_type` (optional, list of strings): Filter results to specific Biolink types. Types can be specified with or without the `biolink:` prefix (e.g., `biolink:Disease` or `Disease`). Multiple types are combined with OR logic, so filtering for `PhenotypicFeature` and `Disease` will return concepts that are either phenotypic features OR diseases.
 - `only_prefixes` (optional, string): Pipe-separated, case-sensitive list of CURIE prefixes to include (e.g., `MONDO|EFO`). Only results with matching prefixes will be returned.
 - `exclude_prefixes` (optional, string): Pipe-separated, case-sensitive list of CURIE prefixes to exclude (e.g., `UMLS|EFO`). Results with matching prefixes will be filtered out.

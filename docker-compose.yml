@@ -1,7 +1,10 @@
 services:
   nameres_solr:
     container_name: nameres_solr
-    image: solr:9.1
+    # Pinned to the 9.10 line rather than an exact patch: a serving Solr must be >= the
+    # Solr that built the backup (data-loading pins that exactly), and any 9.10.x can
+    # read a 9.10.x index, so floating within the line only picks up fixes.
+    image: solr:9.10
     mem_limit: 18G
     environment:
       # Change this setting to control how much memory you would like your Solr setup to have.
@@ -9,7 +12,8 @@ services:
       SOLR_JAVA_MEM: '-Xmx16G'
     ports:
       - '8983:8983'
-    command: ['-DzkRun']
+    # Standalone mode (no ZooKeeper). To load data, extract a NameRes backup into
+    # ./data/solr so the name_lookup/ core is auto-discovered on startup.
 
     # Solr needs to store its data somewhere. It defaults to `./data`, but you can reconfigure this to any
     # directory you want.

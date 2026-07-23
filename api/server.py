@@ -23,6 +23,9 @@ from api.apidocs import get_app_info, construct_open_api_schema
 
 SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
 SOLR_PORT = os.getenv("SOLR_PORT", "8983")
+# The Solr core to query. In standalone mode this is the core name; the cloud-mode
+# backups we used to ship called it name_lookup_shard1_replica_n1 instead (see status()).
+SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
@@ -35,9 +38,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Solr core name for this application.
-SOLR_CORE_NAME = 'name_lookup_shard1_replica_n1'
 
 # We track the time taken for each Solr query for the last 1000 queries so we can track performance via /status.
 DEFAULT_RECENT_TIMES_COUNT = 1000
@@ -97,7 +97,10 @@ async def status(include_metrics: bool = False) -> Dict:
                 if metrics_resp.status_code < 300:
                     all_metrics = metrics_resp.json().get('metrics', {})
 
-                    core_data = all_metrics.get(f'solr.core.{SOLR_CORE_NAME}', {})
+                    # A NameRes Solr has exactly one core; its metrics registry is named
+                    # solr.core.<coreName> (name_lookup standalone, name_lookup_shard1_replica_n1
+                    # on older cloud backups). Grab whichever one is present.
+                    core_data = next((v for k, v in all_metrics.items() if k.startswith('solr.core.')), {})
                     qh = core_data.get('QUERY./select.requestTimes', {})
                     cache = core_data.get('CACHE.core.queryResultCache', {})
                     heap = all_metrics.get('solr.jvm', {}).get('memory.heap', {})
@@ -154,10 +157,16 @@ async def status(include_metrics: bool = False) -> Dict:
         'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
     }
 
-    # We should have a status for SOLR_CORE_NAME.
-    if 'status' in result and SOLR_CORE_NAME in result['status']:
-        core = result['status'][SOLR_CORE_NAME]
+    # We should have a status for our core. Standalone Solr calls it ${SOLR_CORE}
+    # (name_lookup); the older cloud-mode backups called it
+    # name_lookup_shard1_replica_n1. A NameRes Solr only ever has one core, so if the
+    # expected name isn't there but there is exactly one core, report on that one.
+    cores = result.get('status', {})
+    core = cores.get(SOLR_CORE)
+    if core is None and len(cores) == 1:
+        core = next(iter(cores.values()))
 
+    if core is not None:
         index = {}
         if 'index' in core:
             index = core['index']
@@ -173,7 +182,11 @@ async def status(include_metrics: bool = False) -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
-            'startTime': core['startTime'],
+            # .get() rather than [], like every field below it: Solr's core STATUS
+            # returns a sparse entry for a core that is still initializing, and
+            # /status is what the Kubernetes probes call. A KeyError here would turn
+            # a startup window into a 500 instead of a report with blank counts.
+            'startTime': core.get('startTime', ''),
             'numDocs': index.get('numDocs', ''),
             'maxDoc': index.get('maxDoc', ''),
             'deletedDocs': index.get('deletedDocs', ''),
@@ -234,7 +247,7 @@ async def reverse_lookup_get(
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await curie_lookup(curies)
+    return await name_lookup(curies)
 
 
 @app.get(
@@ -253,7 +266,7 @@ async def synonyms_get(
         )
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await curie_lookup(preferred_curies)
+    return await name_lookup(preferred_curies)
 
 
 @app.post(
@@ -270,7 +283,7 @@ async def lookup_names_post(
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await curie_lookup(request.curies)
+    return await name_lookup(request.curies)
 
 
 @app.post(
@@ -288,13 +301,13 @@ async def synonyms_post(
         }),
 ) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    return await curie_lookup(request.preferred_curies)
+    return await name_lookup(request.preferred_curies)
 
 
-async def curie_lookup(curies) -> Dict[str, Dict]:
+async def name_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
     time_start = time.time_ns()
-    query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
+    query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/{SOLR_CORE}/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
         for curie in curies
@@ -356,7 +369,7 @@ async def lookup_curies_get(
             ge=0
         )] = 0,
         limit: Annotated[int, Query(
-            description="The number of results to skip. Can be used to page through the results of a query.",
+            description="The number of results to return. Can be used to page through the results of a query.",
             # Limit should be greater than or equal to zero and less than or equal to 1000.
             ge=0,
             le=1000
@@ -420,7 +433,7 @@ async def lookup_curies_post(
             ge=0
         )] = 0,
         limit: Annotated[int, Query(
-            description="The number of results to skip. Can be used to page through the results of a query.",
+            description="The number of results to return. Can be used to page through the results of a query.",
             # Limit should be greater than or equal to zero and less than or equal to 1000.
             ge=0,
             le=1000
@@ -609,7 +622,7 @@ async def lookup(string: str,
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
     time_solr_start = time.time_ns()
-    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
+    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/{SOLR_CORE}/select"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
@@ -717,7 +730,7 @@ class NameResQuery(BaseModel):
     )
     limit: Optional[int] = Field(
         10,
-        description="The number of results to skip. Can be used to page through the results of a query.",
+        description="The number of results to return. Can be used to page through the results of a query.",
         # Limit should be greater than or equal to zero and less than or equal to 1000.
         ge=0,
         le=1000
@@ -802,7 +815,7 @@ if os.environ.get('OTEL_ENABLED', 'false') == 'true':
     # these supresses such warnings.
     logging.captureWarnings(capture=True)
     warnings.filterwarnings("ignore", category=ResourceWarning)
-    otel_service_name = os.environ.get('SERVER_NAME', 'infores:sri-node-normalizer')
+    otel_service_name = os.environ.get('SERVER_NAME', 'infores:sri-name-resolver')
     assert otel_service_name and isinstance(otel_service_name, str)
 
     otlp_host = os.environ.get("JAEGER_HOST", "http://localhost/").rstrip('/')
