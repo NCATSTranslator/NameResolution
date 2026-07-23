@@ -98,7 +98,22 @@ usually `/var/solr`) and `SOLR_EXEC` (the `bin/solr` executable) to be set -- th
    NameRes instance at it (see below).
 
 Tuning knobs: `SOLR_MEM` (Solr heap for the load), `LOAD_PARALLELISM`
-(concurrent uploads; defaults to the number of CPUs), `SPLIT_SIZE` / `SPLIT_LINES`.
+(concurrent uploads; defaults to the cgroup CPU limit, which inside a container is
+the pod's limit rather than the node's core count — see
+[`available-cpus.sh`](available-cpus.sh)), `SPLIT_SIZE` / `SPLIT_LINES`.
+
+Loading is **additive**, not idempotent: every document is given a fresh UUID, so
+loading the same files twice puts every document in twice. The loader therefore
+refuses to load into a core that already has documents. If a load dies partway
+through, do not just re-run it — delete the core and start it again:
+
+```shell
+$ make stop-solr && rm -rf "${SOLR_DIR:-/var/solr}/name_lookup" "${SOLR_DIR:-/var/solr}"/*.done
+$ make all
+```
+
+(`LOAD_APPEND=1` overrides the refusal, for the genuine case of loading a second,
+distinct set of files into an existing core.)
 
 ## Restoring the backup
 
@@ -114,9 +129,19 @@ trivial in every environment:
   Job no longer creates a collection or re-applies the schema; its only remaining
   job is deleting blocklisted CURIEs.
 
+Solr needs to *write* to the core it serves — it takes a write lock, and refuses to
+load the core if it cannot. The loading image runs as uid 1000 and the official Solr
+image runs as uid 8983, so the Makefile stamps 8983 onto every file as it builds the
+tarball (`BACKUP_UID` / `BACKUP_GID`) and the restore needs no `chown`. Extract as
+root, or as a user that can set ownership; extracting as an unprivileged user gives
+the files to whoever extracted them, and Solr will not be able to write.
+
+A backup built before this (anything whose files come out owned by uid 1000) needs
+`chown -R 8983:8983` on the extracted core.
+
 The Solr version used to serve the backup must be **>=** the version that built
 it (an older Solr cannot read a newer Lucene index). The builder is pinned exactly
-(`SOLR_VERSION` in the [`Dockerfile`](Dockerfile), 9.10.0 today) because it names a
+(`SOLR_VERSION` in the [`Dockerfile`](Dockerfile), 9.10.1 today) because it names a
 release tarball; the servers (`docker-compose.yml`, CI, the Helm chart) track the
 `9.10` line, so they float forward onto patch releases and stay at or above the
 builder without anyone having to remember to bump them.

@@ -91,8 +91,27 @@ if [ -z "${before}" ]; then
   echo "Could not read the current document count from Solr. Aborting." >&2
   exit 1
 fi
+
+# Refuse to load into a non-empty core by default. Loading is additive and every
+# document gets a fresh UUID, so a second load over the same files silently doubles
+# the index -- and the count guard below cannot see it, because the *delta* is still
+# exactly the number of input documents. That is the one way this script can hand
+# back a corrupt index while reporting success, so it is a hard error rather than a
+# warning. It fires in the two cases that actually happen: a load re-run after the
+# previous one died partway through, and make re-running the load because a stamp
+# file went missing (see the stamp-file comment in the Makefile).
 if [ "${before}" -ne 0 ]; then
-  echo "NOTE: core '${CORE}' already contains ${before} documents; this load adds to them."
+  if [ "${LOAD_APPEND:-0}" = "1" ]; then
+    echo "NOTE: core '${CORE}' already contains ${before} documents; LOAD_APPEND=1, so this load adds to them."
+  else
+    echo "Core '${CORE}' already contains ${before} documents, and loading is additive:" >&2
+    echo "re-running the load would duplicate every document rather than resume it." >&2
+    echo >&2
+    echo "To start over, delete the core's index and let make recreate it:" >&2
+    echo "    make stop-solr && rm -rf \"\${SOLR_DIR:-/var/solr}/${CORE}\" \"\${SOLR_DIR:-/var/solr}\"/*.done" >&2
+    echo "To append anyway (you are loading a second, distinct set of files), set LOAD_APPEND=1." >&2
+    exit 1
+  fi
 fi
 
 # Step 3. Load the files in parallel, streaming each one, without committing.

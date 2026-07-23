@@ -18,7 +18,7 @@ SYNONYMS_URL ?= https://stars.renci.org/var/babel_outputs/2026jul22/synonyms/
 # committed, not just a ceiling.
 #
 # Indexing does not want a big heap: Lucene buffers documents in ramBufferSizeMB
-# (512 MB, set in the configset) and streams merges through the OS page cache, so
+# (2 GB, set in the configset) and streams merges through the OS page cache, so
 # heap beyond a few GB is memory taken away from that cache. Staying under 32G also
 # keeps compressed object pointers, which a larger heap silently gives up.
 # See data-loading/kubernetes/README.md for how to check this against Grafana.
@@ -44,6 +44,16 @@ CONFIGSET ?= $(CURDIR)/configsets/name_lookup
 
 # The Solr core name. Do not change without also changing NameRes and the configset.
 CORE=name_lookup
+
+# The uid/gid the backup's files are owned by. This is `solr` in the official Solr
+# image, which is what serves the backup everywhere: docker-compose, the Helm chart
+# and CI. The loading image runs as `nru` (1000) instead, so without this the
+# restored core is owned by a user that does not exist on the serving side and Solr
+# cannot take its write lock -- a core that fails to load with a permissions error at
+# the end of a multi-hour restore. Stamping the ownership at tar time fixes it for
+# every restore path at once, rather than asking each one to remember a chown.
+BACKUP_UID ?= 8983
+BACKUP_GID ?= 8983
 
 # Split any synonym file larger than SPLIT_SIZE into chunks of SPLIT_LINES lines.
 # Splitting only helps parallelism, so we only bother with the big files; JSON is
@@ -82,21 +92,29 @@ all: ${SETUP_DONE}
 # ${SOLR_DIR}/${CORE} (or, on Kubernetes, just recreate the pod).
 clean:
 	rm -rf data/*
-	mkdir data
+	mkdir -p data
 	rm -f ${SOLR_STARTED} ${CORE_DONE} ${SETUP_DONE}
 
 # Step 1. Download and uncompress synonym files, then split the large ones so the
 # parallel loader has more units of work.
 data/synonyms/done:
 	mkdir -p data/synonyms
-	wget -c -r -l1 -nd -P data/synonyms ${SYNONYMS_URL}
+	# -A restricts what is saved to the synonym files themselves. Everything in
+	# data/synonyms is loaded into Solr (the glob in step 4 is *.txt*), so anything
+	# else wget leaves behind -- a robots.txt, most obviously -- becomes a file the
+	# loader tries to index. Solr answers 200 and indexes nothing for it, so the
+	# document-count guard catches it, but only at the end of a multi-hour load.
+	wget -c -r -l1 -nd -A '*.txt,*.txt.gz' -P data/synonyms ${SYNONYMS_URL}
 	# -exec (rather than a glob) so that a rerun where everything is already
 	# uncompressed is a no-op instead of a "no such file" failure.
 	find data/synonyms -maxdepth 1 -type f -name '*.txt.gz' -exec gunzip {} +
 	echo Downloaded synonyms from ${SYNONYMS_URL}
-	find data/synonyms -maxdepth 1 -type f -name '*.txt' -size +${SPLIT_SIZE} -print | while read -r f; do \
+	# pipefail plus `|| exit 1` so that a failed split fails the target. Without both,
+	# the loop's status is whichever iteration ran last and a file that failed to
+	# split halfway through the set is silently loaded whole (or not at all).
+	set -o pipefail; find data/synonyms -maxdepth 1 -type f -name '*.txt' -size +${SPLIT_SIZE} -print | while read -r f; do \
 		echo "Splitting large file $$f (larger than ${SPLIT_SIZE})..."; \
-		split -d -l ${SPLIT_LINES} "$$f" "$$f." && rm "$$f"; \
+		split -d -l ${SPLIT_LINES} "$$f" "$$f." && rm "$$f" || exit 1; \
 	done
 	touch $@
 
@@ -148,7 +166,17 @@ data/backup.done: ${SETUP_DONE} | ${SOLR_STARTED}
 	# can exit non-zero under Docker even on a clean stop (SOLR-16463), so ignore it.
 	${SOLR_EXEC} stop -p 8983 || true
 	rm -f ${SOLR_STARTED}
-	set -o pipefail; tar -C ${SOLR_DIR} -cf - ${CORE} | ${GZIP_CMD} > data/snapshot.backup.tar.gz
+	# --owner/--group stamp the serving Solr's uid onto every member (see BACKUP_UID
+	# above); --numeric-owner makes the restoring tar use those numbers rather than
+	# looking up whatever "solr" means on the restoring host.
+	#
+	# tlog is left out: the optimize above committed, so there is nothing uncommitted
+	# to replay, and Solr recreates the directory on startup. It is dead weight in a
+	# tarball this size.
+	set -o pipefail; tar -C ${SOLR_DIR} \
+		--numeric-owner --owner=${BACKUP_UID} --group=${BACKUP_GID} \
+		--exclude='${CORE}/data/tlog' \
+		-cf - ${CORE} | ${GZIP_CMD} > data/snapshot.backup.tar.gz
 	touch $@
 
 .PHONY: stop-solr

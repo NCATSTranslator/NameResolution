@@ -88,8 +88,11 @@
 
     <documentCache size="512" initialSize="512" autowarmCount="0"/>
 
-    <!-- Make the first query wait for a warmed searcher rather than answering slowly
-         from a cold one. -->
+    <!-- Make requests wait for the searcher to be registered rather than being served
+         from one that is not ready yet. Note that this is all it does here: with
+         autowarmCount=0 above and no firstSearcher/newSearcher listeners declared,
+         there is no cache warming for it to wait on. It matters at core startup, which
+         is the only time a NameRes searcher is opened, since serving is read-only. -->
     <useColdSearcher>false</useColdSearcher>
   </query>
 

@@ -30,8 +30,16 @@ instance or from Translator.
    (`snapshot.backup.tar.gz`) once it has been decompressed.
 
    ```shell
-   $ tar -C ./data/solr -xzvf snapshot.backup.tar.gz
+   $ sudo tar -C ./data/solr --numeric-owner -xzvf snapshot.backup.tar.gz
    ```
+
+   Solr writes to the core it serves (it takes a write lock, and will not load the core
+   if it cannot), and it runs as uid 8983 inside the container. The tarball records that
+   ownership, so extract it as root — `--numeric-owner` then applies the recorded uid
+   rather than looking up what `solr` happens to mean on your machine. Extracting as an
+   ordinary user gives the files to you instead, and Solr will fail to load the core.
+   For a backup built before this was the case, or if you see permission errors in the
+   Solr log, fix it with `sudo chown -R 8983:8983 ./data/solr/name_lookup`.
 5. Check the [docker-compose.yml](./docker-compose.yml) file to ensure that it is
    as you expect.
     * The Docker Compose file will use the latest released version of NameRes

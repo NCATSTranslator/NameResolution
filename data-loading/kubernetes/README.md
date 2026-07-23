@@ -31,9 +31,21 @@ which asks for the namespace to support `nvme-ephemeral` volumes.
 
 Being persistent does buy one thing in the meantime. The Makefile's stamp files --
 "the core exists", "the data is loaded" -- live on the Solr volume rather than in
-`data/`, so if the pod dies partway through, a replacement resumes exactly where it
-left off instead of reindexing from scratch. Logs go the other way, to `data/logs/`,
-because logs matter most when a run has died.
+`data/`, so a replacement pod skips the steps that already finished instead of
+starting from nothing. Logs go the other way, to `data/logs/`, because logs matter
+most when a run has died.
+
+That resumption is per *step*, though, and the load is one step. A pod that dies
+mid-load leaves a partly-filled core and no stamp, and the load cannot be continued:
+it is additive and assigns fresh UUIDs, so re-running it would index the already-
+loaded files a second time. The loader refuses a non-empty core for that reason. The
+recovery is to throw the index away and load again -- the download, which is the part
+worth keeping, is on the other volume and survives:
+
+```shell
+$ make stop-solr && rm -rf /var/solr/name_lookup /var/solr/*.done
+$ make all
+```
 
 ## Running a load
 
@@ -79,7 +91,9 @@ Run it under `screen` or `tmux`: a full load is hours long, and `kubectl exec` d
 not survive a dropped connection.
 
 If the pod dies partway through, recreate it and run the same commands: both volumes
-survive, so make picks up from the last completed step rather than starting over.
+survive, so make picks up from the last completed step rather than starting over. The
+exception is dying *during* the load, which cannot be resumed -- see "Two volumes"
+above for how to clear the core and restart it.
 
 ## What actually costs time
 
@@ -186,3 +200,5 @@ the pod spec (the Makefile uses `?=`).
 | `SPLIT_SIZE` / `SPLIT_LINES` | `2G` / 10M | How the big synonym files are split. More, smaller chunks give the parallel loader a shorter tail at the end of the run; fewer, larger ones mean less `split` time up front. |
 | `ramBufferSizeMB` | 2048 (in the configset) | Not an environment variable -- it lives in `solrconfig.xml`. It is a budget shared across indexing threads, so the segment size at flush is roughly this divided by the number of concurrent uploads: ~64 MB at 32 uploads. Raise it further if the Grafana disk panels show the run still merging long after the uploads have finished; there is heap to spare. |
 | `SOLR_STARTUP_TRIES` | 60 | How long the loader waits for Solr (3s each) before giving up. |
+| `LOAD_APPEND` | unset | Set to `1` to load into a core that already has documents. The loader refuses by default, because loading is additive and a re-run would duplicate every document. Only correct when you are deliberately adding a second, distinct set of files. |
+| `BACKUP_UID` / `BACKUP_GID` | `8983` | The uid/gid stamped onto the backup's files, so the serving Solr can write to the core it restores without a `chown`. |

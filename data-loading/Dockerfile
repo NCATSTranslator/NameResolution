@@ -100,6 +100,13 @@ COPY --chown=nru Makefile ${ROOT}
 COPY --chown=nru configsets ${ROOT}/configsets
 
 # On entry, start the Solr instance (standalone -- no ZooKeeper for a one-node load).
+#
+# SOLR_MEM matches the Makefile's default, and for the same reason: `solr -m` sets
+# both -Xms and -Xmx, and indexing wants the memory as page cache rather than heap
+# (see the SOLR_MEM comment in the Makefile). Note that the Kubernetes pod replaces
+# this command entirely and lets the Makefile start Solr, so this entrypoint only
+# matters when the image is run directly.
 ENV SOLR_EXEC="/opt/solr/bin/solr"
 ENV SOLR_DIR="$SOLR_DIR"
-ENTRYPOINT ${SOLR_EXEC} start -f --user-managed -p 8983 -m 64G -s ${SOLR_DIR}
+ENV SOLR_MEM="31G"
+ENTRYPOINT ${SOLR_EXEC} start -f --user-managed -p 8983 -m ${SOLR_MEM} -s ${SOLR_DIR}

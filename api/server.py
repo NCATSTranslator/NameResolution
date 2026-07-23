@@ -111,7 +111,11 @@ async def status() -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
-            'startTime': core['startTime'],
+            # .get() rather than [], like every field below it: Solr's core STATUS
+            # returns a sparse entry for a core that is still initializing, and
+            # /status is what the Kubernetes probes call. A KeyError here would turn
+            # a startup window into a 500 instead of a report with blank counts.
+            'startTime': core.get('startTime', ''),
             'numDocs': index.get('numDocs', ''),
             'maxDoc': index.get('maxDoc', ''),
             'deletedDocs': index.get('deletedDocs', ''),

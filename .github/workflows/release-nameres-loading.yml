@@ -1,6 +1,13 @@
 name: 'Release a new version of NameResolution Data Loading to Github Packages'
 
 on:
+    # TEMPORARY, delete before merging (NameResolution#278). Publishes a `pr-NNN` image
+    # so a load can be run against this branch's pipeline without merging it -- the
+    # Makefile, loader and configset all live inside the image, so the image tag is the
+    # only way to run a change. Not fit to keep: it publishes a package on every push
+    # to every PR, and a PR from a fork gets a read-only GITHUB_TOKEN (which
+    # `permissions:` cannot widen), so the push fails and the contributor sees a red X
+    # they can do nothing about.
     pull_request:
     release:
         types: [published]
