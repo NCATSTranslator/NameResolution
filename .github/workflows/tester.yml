@@ -104,7 +104,7 @@ jobs:
             sleep 2
           done
           count=$(curl -sf 'http://localhost:8984/solr/name_lookup/query?q=*:*&rows=0' \
-            | grep -oE '"numFound":[0-9]+' | head -1 | grep -oE '[0-9]+')
+            | grep -oE '"numFound":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+')
           expected=$(grep -c '[^[:space:]]' tests/data/test-synonyms.json)
           echo "Restored core reports ${count:-0} documents; expected ${expected}."
           [ "${count:-0}" = "${expected}" ]

@@ -35,10 +35,12 @@ STARTUP_TRIES="${SOLR_STARTUP_TRIES:-60}"
 
 GLOB="${1:?usage: setup-and-load-solr.sh \"data/synonyms/*.txt*\" (quote the glob!)}"
 
-# Number of documents currently in the core.
+# Number of documents currently in the core. The regex tolerates optional whitespace
+# after the colon: /query runs with indent=true, so Solr's JSON writer may format this
+# as `"numFound": 89`. head -1 guards against sibling keys like numFoundExact.
 solr_count() {
   curl -sf "${SOLR_SERVER}/solr/${CORE}/query?q=*:*&rows=0" \
-    | grep -oE '"numFound":[0-9]+' | head -1 | grep -oE '[0-9]+'
+    | grep -oE '"numFound":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+'
 }
 
 # Step 1. Wait for the core to be available (bounded: a Solr that never comes up
