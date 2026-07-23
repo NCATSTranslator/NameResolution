@@ -15,7 +15,9 @@ FROM ghcr.io/translatorsri/renci-python-image:3.11.5
 # Configuration options:
 # - ${ROOT} is where the source code will be copied.
 ARG ROOT=/code/nameres-data-loading
-# - ${SOLR_VERSION} is the SOLR version to install.
+# - ${SOLR_VERSION} is the SOLR version to install. This has to be an exact version
+#   (it names a release tarball), and it is the floor for every Solr that serves the
+#   resulting backup -- see "Restoring the backup" in README.md.
 #   You can find the latest version at https://solr.apache.org/downloads.html
 ARG SOLR_VERSION=9.10.0
 # - ${SOLR_DIR} is the SOLR directory to use.
@@ -29,11 +31,15 @@ RUN apt -y upgrade
 RUN apt install -y python3-venv
 RUN pip3 install --upgrade pip
 
-# We need Java 11 to run SOLR.
-RUN apt install -y openjdk-11-jre
+# Solr 9 needs Java 11 at a minimum, but is built and tested against 17; use 17.
+RUN apt install -y openjdk-17-jre
 
 # SOLR uses lsof to check on its status.
 RUN apt install -y lsof
+
+# pigz (parallel gzip) is used by the Makefile to compress the backup; gzip alone
+# takes hours on a 130 GB index.
+RUN apt install -y pigz
 
 # The following packages are useful in debugging, but can be
 # removed once this container is working properly.

@@ -7,11 +7,21 @@
 # The backup is the whole Solr core -- config, schema AND index -- so restoring
 # it is just "untar into the Solr home and start Solr" (see ../data-loading/README.md).
 
+# Recipes below use pipefail, which /bin/sh (dash on Debian) does not support.
+SHELL := /bin/bash
+
 # Configuration
 SYNONYMS_URL=https://stars.renci.org/var/babel_outputs/2025sep1/synonyms/
 
-# How much memory should Solr use.
+# How much memory should Solr use during the load. This is the heap of the
+# *loading* Solr on a large build machine, not of the Solr that serves queries --
+# serving wants a small heap so the OS page cache can hold the index instead.
 SOLR_MEM=220G
+
+# A 130 GB Lucene index is already largely compressed, and gzip is single-threaded,
+# so compressing the backup with gzip takes hours for a few percent. Use pigz
+# (parallel gzip, same format) when it is available.
+GZIP_CMD := $(shell command -v pigz > /dev/null 2>&1 && echo pigz || echo gzip)
 
 # The checked-in configset used to create the core (contains conf/).
 CONFIGSET=configsets/name_lookup
@@ -46,7 +56,9 @@ clean:
 data/synonyms/done:
 	mkdir -p data/synonyms
 	wget -c -r -l1 -nd -P data/synonyms ${SYNONYMS_URL}
-	gunzip data/synonyms/*.txt.gz
+	# -exec (rather than a glob) so that a rerun where everything is already
+	# uncompressed is a no-op instead of a "no such file" failure.
+	find data/synonyms -maxdepth 1 -type f -name '*.txt.gz' -exec gunzip {} +
 	echo Downloaded synonyms from ${SYNONYMS_URL}
 	find data/synonyms -maxdepth 1 -type f -name '*.txt' -size +${SPLIT_SIZE} -print | while read -r f; do \
 		echo "Splitting large file $$f (larger than ${SPLIT_SIZE})..."; \
@@ -59,14 +71,25 @@ data/synonyms/done:
 data/solr.pid:
 	mkdir -p ${SOLR_DIR}/logs
 	${SOLR_EXEC} start -p 8983 --user-managed -v -m ${SOLR_MEM} -s ${SOLR_DIR} >> ${SOLR_DIR}/logs/solr.txt 2>> ${SOLR_DIR}/logs/solr.err.txt
-	while [ ! -s $@ ]; do \
+	# Bounded, with a sleep: a Solr that fails to start should stop the build rather
+	# than spin a CPU forever.
+	@tries=0; while [ ! -s $@ ]; do \
+		tries=$$((tries + 1)); \
+		if [ $$tries -gt 60 ]; then \
+			echo "Solr did not start after two minutes; see ${SOLR_DIR}/logs/solr.err.txt" >&2; \
+			exit 1; \
+		fi; \
+		sleep 2; \
 		${SOLR_EXEC} status | grep -Po 'Solr process \K([0-9]+)' > $@; \
 	done
 	$(info Solr started with PID file at $@)
 	cat $@
 
 # Step 3. Create the core from the checked-in configset (schema lives there).
-data/core.done: data/solr.pid
+# solr.pid is order-only (after the |): the core needs a running Solr, but restarting
+# Solr must not make the core look stale -- re-running `solr create` on a core that
+# already exists is an error.
+data/core.done: | data/solr.pid
 	${SOLR_EXEC} create -c ${CORE} -d ${CONFIGSET}
 	touch $@
 
@@ -78,14 +101,17 @@ data/setup.done: data/synonyms/done data/core.done
 # Step 5. Optimize the index, shut down Solr, and tar the whole core into a
 # self-contained backup. Extracting snapshot.backup.tar.gz into the Solr home
 # yields a ready-to-serve name_lookup/ core -- no restore-time schema setup.
-data/backup.done: data/setup.done
+# data/solr.pid is an order-only prerequisite because optimizing needs a *running*
+# Solr: the stamp files survive a container restart, but the server does not, so a
+# restarted container should start Solr again rather than fail here.
+data/backup.done: data/setup.done | data/solr.pid
 	@echo "Optimizing the index before export (this can take a while on a large index)..."
 	curl -sf --show-error 'http://localhost:8983/solr/${CORE}/update?optimize=true'
 	# The optimize above commits, so the on-disk index is consistent. `solr stop`
 	# can exit non-zero under Docker even on a clean stop (SOLR-16463), so ignore it.
 	${SOLR_EXEC} stop -p 8983 || true
 	rm -f data/solr.pid
-	tar -C ${SOLR_DIR} -czvf data/snapshot.backup.tar.gz ${CORE}
+	set -o pipefail; tar -C ${SOLR_DIR} -cf - ${CORE} | ${GZIP_CMD} > data/snapshot.backup.tar.gz
 	touch $@
 
 .PHONY: stop-solr
