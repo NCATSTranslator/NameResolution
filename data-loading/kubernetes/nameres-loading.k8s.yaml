@@ -21,16 +21,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: nameres-loading
-    # TEMPORARY, until NameResolution#278 is merged and released. The publish
-    # workflow only tags `latest` on a release, so `latest` is still the image from
-    # before this work: old Makefile, old loader, 220G heap, no available-cpus.sh.
-    # The Makefile, the loader and the configset all live inside the image, so the
-    # tag decides which pipeline actually runs -- editing this file is not enough.
-    # Switch back to `latest` once the release is cut.
-    #
-    # Check you got the image you meant, once you are in the pod:
-    #   ls available-cpus.sh && grep ramBufferSizeMB configsets/name_lookup/conf/solrconfig.xml
-    image: ghcr.io/ncatstranslator/nameresolution-data-loading:pr-278
+    image: ghcr.io/ncatstranslator/nameresolution-data-loading:latest
     imagePullPolicy: Always
     # Idle until someone execs in. `make all` is run by hand, not by the pod.
     command: ["sleep", "infinity"]
