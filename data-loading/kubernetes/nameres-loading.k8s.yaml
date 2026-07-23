@@ -5,11 +5,10 @@
 # below deliberately replaces the image's entrypoint, which would otherwise start a
 # Solr of its own -- the Makefile starts Solr itself, using SOLR_MEM as its heap.
 #
-# Both volumes are persistent PVCs, so both outlive the pod and both have to be
-# deleted by hand when the load is finished. Putting the index on a node-local NVMe
-# ephemeral volume instead would make the merge and optimize phases substantially
-# faster; that is ready to go in a separate PR and is blocked on issue #280, which
-# asks for the namespace to support it. See README.md.
+# The index lives on a node-local NVMe volume that is created and destroyed with the
+# pod; the synonym files and the finished backup live on a persistent volume that
+# does not. Deleting this pod therefore throws away the index and keeps the work
+# that was expensive to fetch. See README.md.
 
 apiVersion: v1
 kind: Pod
@@ -57,8 +56,8 @@ spec:
     # before changing either number.
     #
     # These have to fit on ONE node, which is a stricter test than the namespace
-    # quota. Check node capacity before raising them, not just what the namespace has
-    # left.
+    # quota -- and the same node has to have the NVMe volume free. Check node
+    # capacity before raising them, not just what the namespace has left.
     resources:
       requests:
         ephemeral-storage: "1G"
@@ -68,30 +67,36 @@ spec:
         ephemeral-storage: "1G"
         memory: "128Gi"
         cpu: "32"
-  # The image runs as nru, uid/gid 1000. fsGroup hands the volumes to that group;
-  # without it a freshly provisioned volume is root-owned and Solr cannot write a
-  # thing. runAsUser only restates what the image already does.
-  #
-  # OnRootMismatch matters here because these are persistent volumes holding a
-  # ~130G index: the default (Always) makes the kubelet chown every file on every
-  # mount, which on a volume this size is minutes of pod startup for nothing. With
-  # OnRootMismatch it checks the top directory and skips the walk once it is right.
+  # The image runs as nru, uid/gid 1000. fsGroup makes the kubelet hand the NVMe
+  # volume over to that group; without it the volume is root-owned and Solr cannot
+  # write a thing. runAsUser only restates what the image already does.
   securityContext:
     runAsUser: 1000
     fsGroup: 1000
-    fsGroupChangePolicy: OnRootMismatch
   volumes:
-    # The Solr home: the index, and at the end the thing that gets tarred into the
-    # backup. This takes the entire write load of the indexing run and then the
-    # read-and-write of the optimize, so it is the volume whose speed decides how long
-    # a load takes -- see issue #280 for moving it onto node-local NVMe.
+    # The index goes on a node-local NVMe volume. It is the right thing to put there
+    # twice over: it takes the whole write load of the indexing run and then the
+    # read-and-write of the optimize, so it is the volume that benefits most from the
+    # speed -- and it is pure intermediate state, so losing it with the pod costs
+    # nothing that cannot be rebuilt from the synonym files next door.
     #
-    # Being persistent has one consolation prize: the Makefile's stamp files live on
-    # this volume, so if the pod dies partway through, a replacement picks up exactly
-    # where it left off instead of reindexing from scratch.
+    # This is a *generic ephemeral volume*: created with the pod and deleted with it.
+    # Not to be confused with the `ephemeral-storage` resource above, which is the
+    # node's own scratch space for the container filesystem.
+    #
+    # Sizing is the same 2-3x-the-index rule as the PVC (optimize writes the new
+    # segment before dropping the old ones), so 600Gi has to fit on the node's local
+    # NVMe. If no node has that much, see README.md, "If the NVMe volume will not
+    # schedule", which has the network-storage fallback.
     - name: nameres-loading-solr
-      persistentVolumeClaim:
-        claimName: nameres-loading-solr
+      ephemeral:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ "ReadWriteOnce" ]
+            storageClassName: nvme-ephemeral
+            resources:
+              requests:
+                storage: 600Gi
     # This one stays persistent: it holds the ~130G download and, at the end, the
     # backup tarball, which is the only thing the whole exercise produces.
     - name: nameres-loading-data
