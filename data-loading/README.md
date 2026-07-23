@@ -64,7 +64,11 @@ trivial in every environment:
   job is deleting blocklisted CURIEs.
 
 The Solr version used to serve the backup must be **>=** the version that built
-it (an older Solr cannot read a newer Lucene index). Both are 9.10.x today.
+it (an older Solr cannot read a newer Lucene index). The builder is pinned exactly
+(`SOLR_VERSION` in the [`Dockerfile`](Dockerfile), 9.10.0 today) because it names a
+release tarball; the servers (`docker-compose.yml`, CI, the Helm chart) track the
+`9.10` line, so they float forward onto patch releases and stay at or above the
+builder without anyone having to remember to bump them.
 
 ## Options considered
 

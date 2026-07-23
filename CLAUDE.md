@@ -11,7 +11,7 @@ NameRes (Name Resolver) is a biomedical entity name resolution service that maps
 ### Running Tests
 ```bash
 # Start standalone Solr and create the name_lookup core from the checked-in configset
-docker run --name name_lookup -d -p 8983:8983 solr:9.10.0
+docker run --name name_lookup -d -p 8983:8983 solr:9.10
 docker cp data-loading/configsets/name_lookup name_lookup:/tmp/name_lookup
 docker exec name_lookup solr create -c name_lookup -d /tmp/name_lookup
 
@@ -85,7 +85,7 @@ Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and b
 
 ### Infrastructure
 - **Stateless API container** - Python 3.11.5/FastAPI
-- **Persistent Solr 9.1** - Data in volume-mounted `./data/solr`
+- **Persistent Solr 9.10 (standalone)** - Data in volume-mounted `./data/solr`
 - **Data loading** - Separate pipeline in `data-loading/` (Makefile-driven, also has Kubernetes configs)
 - **CI/CD** - GitHub Actions: runs tests on push, publishes Docker image to GitHub Packages on release
 

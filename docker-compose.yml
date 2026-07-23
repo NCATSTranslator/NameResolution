@@ -1,8 +1,10 @@
 services:
   nameres_solr:
     container_name: nameres_solr
-    # Must be >= the Solr version that built the backup (see data-loading/Dockerfile).
-    image: solr:9.10.0
+    # Pinned to the 9.10 line rather than an exact patch: a serving Solr must be >= the
+    # Solr that built the backup (data-loading pins that exactly), and any 9.10.x can
+    # read a 9.10.x index, so floating within the line only picks up fixes.
+    image: solr:9.10
     mem_limit: 18G
     environment:
       # Change this setting to control how much memory you would like your Solr setup to have.
