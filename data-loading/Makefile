@@ -51,18 +51,36 @@ SPLIT_LINES ?= 10000000
 # SOLR_DIR should be set up to point to the Solr data directory (usually /var/solr,
 # which is also the Solr home) and SOLR_EXEC should be set up to point to the Solr
 # executable. These will both be set up by the Dockerfile.
+SOLR_DIR ?= /var/solr
+
+# Stamp files live on the volume whose state they describe. These three describe
+# the Solr volume -- a core exists, it has been loaded, a server is running -- and
+# on Kubernetes that volume may be ephemeral NVMe (see kubernetes/README.md), so
+# they have to disappear along with it. Keeping them in data/, which is a separate
+# and persistent volume, would mean a recreated pod found an empty index and a set
+# of stamps swearing it had been loaded.
+SOLR_PID = ${SOLR_DIR}/solr.pid
+CORE_DONE = ${SOLR_DIR}/core.done
+SETUP_DONE = ${SOLR_DIR}/setup.done
+
+# Logs go to data/, which outlives the pod: they are most useful precisely when the
+# run has died and the Solr volume has gone with it.
+LOG_DIR = ${CURDIR}/data/logs
 
 # All and clean targets.
 
 .PHONY: all clean
-all: data/setup.done
+all: ${SETUP_DONE}
 	echo Solr has now been set up and loaded with the synonym data.
 	echo Run 'make data/backup.done' to optimize the index, shut down Solr and
 	echo generate a snapshot.backup.tar.gz file that can be used in NameRes.
 
+# Leaves the index itself alone -- to start over from an empty index, delete
+# ${SOLR_DIR}/${CORE} (or, on Kubernetes, just recreate the pod).
 clean:
 	rm -rf data/*
 	mkdir data
+	rm -f ${SOLR_PID} ${CORE_DONE} ${SETUP_DONE}
 
 # Step 1. Download and uncompress synonym files, then split the large ones so the
 # parallel loader has more units of work.
@@ -81,15 +99,15 @@ data/synonyms/done:
 
 # Step 2. Start the Solr server (standalone -- no ZooKeeper needed for one node).
 # --user-managed keeps standalone mode explicit (Solr 10 will default to cloud).
-data/solr.pid:
-	mkdir -p ${SOLR_DIR}/logs
-	${SOLR_EXEC} start -p 8983 --user-managed -v -m ${SOLR_MEM} -s ${SOLR_DIR} >> ${SOLR_DIR}/logs/solr.txt 2>> ${SOLR_DIR}/logs/solr.err.txt
+${SOLR_PID}:
+	mkdir -p ${LOG_DIR}
+	SOLR_LOGS_DIR=${LOG_DIR} ${SOLR_EXEC} start -p 8983 --user-managed -v -m ${SOLR_MEM} -s ${SOLR_DIR} >> ${LOG_DIR}/solr.txt 2>> ${LOG_DIR}/solr.err.txt
 	# Bounded, with a sleep: a Solr that fails to start should stop the build rather
 	# than spin a CPU forever.
 	@tries=0; while [ ! -s $@ ]; do \
 		tries=$$((tries + 1)); \
 		if [ $$tries -gt 60 ]; then \
-			echo "Solr did not start after two minutes; see ${SOLR_DIR}/logs/solr.err.txt" >&2; \
+			echo "Solr did not start after two minutes; see ${LOG_DIR}/solr.err.txt" >&2; \
 			exit 1; \
 		fi; \
 		sleep 2; \
@@ -102,33 +120,33 @@ data/solr.pid:
 # solr.pid is order-only (after the |): the core needs a running Solr, but restarting
 # Solr must not make the core look stale -- re-running `solr create` on a core that
 # already exists is an error.
-data/core.done: | data/solr.pid
+${CORE_DONE}: | ${SOLR_PID}
 	${SOLR_EXEC} create -c ${CORE} -d ${CONFIGSET}
 	touch $@
 
 # Step 4. Load the synonym files into the core (parallel; with a doc-count guard).
-data/setup.done: data/synonyms/done data/core.done
-	mkdir -p data/logs
-	bash setup-and-load-solr.sh "data/synonyms/*.txt*" >> data/logs/setup-and-load-solr.sh.log 2>> data/logs/setup-and-load-solr.sh.err.log && touch $@
+${SETUP_DONE}: data/synonyms/done ${CORE_DONE}
+	mkdir -p ${LOG_DIR}
+	bash setup-and-load-solr.sh "data/synonyms/*.txt*" >> ${LOG_DIR}/setup-and-load-solr.sh.log 2>> ${LOG_DIR}/setup-and-load-solr.sh.err.log && touch $@
 
 # Step 5. Optimize the index, shut down Solr, and tar the whole core into a
 # self-contained backup. Extracting snapshot.backup.tar.gz into the Solr home
 # yields a ready-to-serve name_lookup/ core -- no restore-time schema setup.
-# data/solr.pid is an order-only prerequisite because optimizing needs a *running*
-# Solr: the stamp files survive a container restart, but the server does not, so a
+# The PID file is an order-only prerequisite because optimizing needs a *running*
+# Solr: the stamps survive a container restart, but the server does not, so a
 # restarted container should start Solr again rather than fail here.
-data/backup.done: data/setup.done | data/solr.pid
+data/backup.done: ${SETUP_DONE} | ${SOLR_PID}
 	@echo "Optimizing the index before export (this can take a while on a large index)..."
 	curl -sf --show-error 'http://localhost:8983/solr/${CORE}/update?optimize=true'
 	# The optimize above commits, so the on-disk index is consistent. `solr stop`
 	# can exit non-zero under Docker even on a clean stop (SOLR-16463), so ignore it.
 	${SOLR_EXEC} stop -p 8983 || true
-	rm -f data/solr.pid
+	rm -f ${SOLR_PID}
 	set -o pipefail; tar -C ${SOLR_DIR} -cf - ${CORE} | ${GZIP_CMD} > data/snapshot.backup.tar.gz
 	touch $@
 
 .PHONY: stop-solr
 stop-solr:
-	rm -f data/solr.pid
+	rm -f ${SOLR_PID}
 	${SOLR_EXEC} stop -p 8983 || true
 	$(info Solr stopped.)
