@@ -1,4 +1,15 @@
-# Kubernetes file for Nameres-loading
+# Kubernetes file for Nameres-loading.
+#
+# This pod is a workspace, not a job: it starts, does nothing, and waits for you to
+# exec in and drive the load by hand (see README.md in this directory). The command
+# below deliberately replaces the image's entrypoint, which would otherwise start a
+# Solr of its own -- the Makefile starts Solr itself, using SOLR_MEM as its heap.
+#
+# Both volumes are persistent PVCs, so both outlive the pod and both have to be
+# deleted by hand when the load is finished. Putting the index on a node-local NVMe
+# ephemeral volume instead would make the merge and optimize phases substantially
+# faster; that is ready to go in a separate PR and is blocked on issue #280, which
+# asks for the namespace to support it. See README.md.
 
 apiVersion: v1
 kind: Pod
@@ -12,9 +23,8 @@ spec:
   - name: nameres-loading
     image: ghcr.io/ncatstranslator/nameresolution-data-loading:latest
     imagePullPolicy: Always
-    # I just need something to run while I figure out how to make this work
-    command: [ "/bin/bash", "-c", "--" ]
-    args: [ "while true; echo Running; do sleep 30; done;" ]
+    # Idle until someone execs in. `make all` is run by hand, not by the pod.
+    command: ["sleep", "infinity"]
     ports:
     - containerPort: 8983
     volumeMounts:
@@ -22,19 +32,59 @@ spec:
       name: nameres-loading-solr
     - mountPath: "/code/nameres-data-loading/data"
       name: nameres-loading-data
+    # Sized for the parallel loader. The load is CPU-bound (Solr analyses every
+    # synonym on the way in), then I/O-bound (merges and the final optimize), so CPU
+    # and disk speed are the levers; memory beyond the heap only helps as page cache.
+    # requests == limits keeps this Guaranteed: a load runs for hours and should not
+    # be evicted halfway through.
+    #
+    # The loader reads the CPU *limit* out of the cgroup and runs that many parallel
+    # uploads, and pigz is given the same number, so raising cpu here is picked up
+    # automatically -- there is no separate parallelism setting to remember.
+    #
+    # Memory: SOLR_MEM (31G by default) is the heap; the rest is JVM overhead and
+    # page cache for merges. This used to be 220G/256G with a 220G heap, which spent
+    # almost all of it in the one place a large heap does not help. See README.md
+    # before changing either number.
+    #
+    # These have to fit on ONE node, which is a stricter test than the namespace
+    # quota. Check node capacity before raising them, not just what the namespace has
+    # left.
     resources:
       requests:
         ephemeral-storage: "1G"
-        memory: "220G"
-        cpu: "6"
+        memory: "128Gi"
+        cpu: "32"
       limits:
         ephemeral-storage: "1G"
-        memory: "256G"
-        cpu: "8"
+        memory: "128Gi"
+        cpu: "32"
+  # The image runs as nru, uid/gid 1000. fsGroup hands the volumes to that group;
+  # without it a freshly provisioned volume is root-owned and Solr cannot write a
+  # thing. runAsUser only restates what the image already does.
+  #
+  # OnRootMismatch matters here because these are persistent volumes holding a
+  # ~130G index: the default (Always) makes the kubelet chown every file on every
+  # mount, which on a volume this size is minutes of pod startup for nothing. With
+  # OnRootMismatch it checks the top directory and skips the walk once it is right.
+  securityContext:
+    runAsUser: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
   volumes:
+    # The Solr home: the index, and at the end the thing that gets tarred into the
+    # backup. This takes the entire write load of the indexing run and then the
+    # read-and-write of the optimize, so it is the volume whose speed decides how long
+    # a load takes -- see issue #280 for moving it onto node-local NVMe.
+    #
+    # Being persistent has one consolation prize: the Makefile's stamp files live on
+    # this volume, so if the pod dies partway through, a replacement picks up exactly
+    # where it left off instead of reindexing from scratch.
     - name: nameres-loading-solr
       persistentVolumeClaim:
         claimName: nameres-loading-solr
+    # This one stays persistent: it holds the ~130G download and, at the end, the
+    # backup tarball, which is the only thing the whole exercise produces.
     - name: nameres-loading-data
       persistentVolumeClaim:
         claimName: nameres-loading-data

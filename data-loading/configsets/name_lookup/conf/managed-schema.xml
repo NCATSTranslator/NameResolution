@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  NameRes Solr schema.
+
+  This is the whole schema, deliberately. It is not a trimmed copy of Solr's _default
+  configset: everything in here is a NameRes decision, so there is nothing to
+  reconcile against upstream when Solr is upgraded.
+
+  It describes one document type, produced by Babel
+  (https://github.com/NCATSTranslator/Babel): one document per clique, with a CURIE, a
+  preferred name, its synonyms, and the fields NameRes scores and filters on.
+
+  The schema is immutable (see schemaFactory in solrconfig.xml). It ships inside the
+  backup along with the index, so this file is also what serves queries in production;
+  there is no restore-time schema setup anywhere.
+
+  Adding a field means adding it here, rebuilding the index and shipping a new backup.
+  There are no dynamic fields and no schemaless mode, so a Babel file carrying a key we
+  did not declare fails at load time with "unknown field" rather than having a field
+  silently invented for it. That is intended: an unexpected key means Babel's output
+  changed, and we want to hear about it.
+-->
+<schema name="nameres" version="1.7">
+
+  <uniqueKey>id</uniqueKey>
+
+  <!-- Field types. Six, and no more: anything not referenced by a field below has no
+       reason to be here.
+
+       LowerTextField and exactish are ours; the other four are Solr's stock
+       definitions, kept verbatim. Neither of ours stems, removes stopwords or applies
+       synonyms, which is why this configset carries no language files at all: Babel
+       synonyms have no language attached, so there is nothing sensible to apply. -->
+
+  <fieldType name="string" class="solr.StrField" sortMissingLast="true"/>
+  <fieldType name="plong" class="solr.LongPointField"/>
+  <fieldType name="pint" class="solr.IntPointField"/>
+  <fieldType name="boolean" class="solr.BoolField" sortMissingLast="true"/>
+
+  <!-- Tokenized and lowercased: matches individual words within a name. -->
+  <fieldType name="LowerTextField" class="solr.TextField" positionIncrementGap="100">
+    <analyzer>
+      <tokenizer class="solr.StandardTokenizerFactory"/>
+      <filter class="solr.LowerCaseFilterFactory"/>
+    </analyzer>
+  </fieldType>
+
+  <!-- The whole value as a single token, lowercased: matches a name in its entirety,
+       case-insensitively. This is what lets an exact-name hit outrank a partial one.
+       (https://stackoverflow.com/a/29105025/27310) -->
+  <fieldType name="exactish" class="solr.TextField" positionIncrementGap="100">
+    <analyzer>
+      <tokenizer class="solr.KeywordTokenizerFactory"/>
+      <filter class="solr.LowerCaseFilterFactory"/>
+    </analyzer>
+  </fieldType>
+
+  <!-- Solr's own fields. `id` is the uniqueKey, assigned per document by the uuid
+       update processor at load time (see solrconfig.xml); `_version_` is required by
+       the update log. -->
+  <field name="id" type="string" multiValued="false" indexed="true" required="true" stored="true"/>
+  <field name="_version_" type="plong" indexed="false" stored="false"/>
+
+  <!-- The Babel document: these come straight from the synonym files. -->
+  <field name="curie" type="string" stored="true"/>
+  <field name="preferred_name" type="LowerTextField" stored="true"/>
+  <field name="names" type="LowerTextField" multiValued="true" indexed="true" stored="true"/>
+  <field name="types" type="string" multiValued="true" stored="true"/>
+  <field name="taxa" type="string" multiValued="true" stored="true"/>
+  <field name="taxon_specific" type="boolean" sortMissingLast="true" multiValued="false" stored="true"/>
+  <field name="shortest_name_length" type="pint" stored="true"/>
+
+  <!-- Scoring and sorting inputs. clique_identifier_count boosts cliques more sources
+       agree on; curie_suffix breaks ties deterministically. api/server.py sorts by
+       score, then clique_identifier_count, then curie_suffix. -->
+  <field name="clique_identifier_count" type="pint" stored="true"/>
+  <field name="curie_suffix" type="plong" sortMissingLast="true" docValues="true" required="false" stored="true"/>
+
+  <!-- Whole-value copies of the two name fields, filled by the copyFields below. Not
+       stored: nothing reads them back, they exist to be queried against, and the text
+       itself is already stored on the field it was copied from. -->
+  <field name="preferred_name_exactish" type="exactish" multiValued="false" indexed="true" stored="false"/>
+  <field name="names_exactish" type="exactish" multiValued="true" indexed="true" stored="false"/>
+
+  <copyField source="names" dest="names_exactish"/>
+  <copyField source="preferred_name" dest="preferred_name_exactish"/>
+
+</schema>

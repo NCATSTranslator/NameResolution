@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  NameRes Solr configuration.
+
+  Written for NameRes rather than copied from Solr's _default configset, so every
+  element below is here because we wanted it. Solr supplies sensible defaults for
+  everything omitted, and the handlers we do not declare (/update, /update/json/docs,
+  /admin/ping, /admin/*) are registered implicitly.
+
+  This ships inside the backup along with the index, so it is the configuration that
+  serves production queries as well as the one used to build the index.
+
+  Upgrading Solr: bump the image tag and let CI create a core from this configset,
+  load it, query it and round-trip a backup. If something here has been removed or
+  renamed upstream, core creation fails and CI goes red. See ../../README.md.
+-->
+<config>
+
+  <!-- Controls analyzer back-compatibility, not which Solr this runs on: it makes
+       Lucene behave as it did in this version even if a later one changes a default.
+       It does not need to track the Solr release, and changing it can change how text
+       is analysed, so leave it alone unless there is a reason and a reindex. -->
+  <luceneMatchVersion>9.12</luceneMatchVersion>
+
+  <!-- The schema is ours and fixed, so make it immutable: with mutable=false the
+       Schema API refuses to write, and this file cannot drift from the one in the
+       repository. Undeclared, Solr would default to a *mutable* managed schema, which
+       is the same trap that made us delete configoverlay.json from this configset:
+       config that Solr can rewrite behind us is a second source of truth.
+
+       The only thing that modifies a live NameRes index is the Helm blocklist step,
+       which deletes documents by query. That needs no schema change. -->
+  <schemaFactory class="ManagedIndexSchemaFactory">
+    <bool name="mutable">false</bool>
+    <str name="managedSchemaResourceName">managed-schema.xml</str>
+  </schemaFactory>
+
+  <directoryFactory name="DirectoryFactory"
+                    class="${solr.directoryFactory:solr.NRTCachingDirectoryFactory}"/>
+
+  <!-- Lets a field type choose its postings format; harmless, and required if we ever
+       add a field type that wants one. -->
+  <codecFactory class="solr.SchemaCodecFactory"/>
+
+  <indexConfig>
+    <!-- Large buffer to speed the bulk load. Harmless for read-only serving, where
+         nothing indexes and so nothing is allocated; this is a budget, not a
+         reservation.
+
+         The budget is shared by all indexing threads, so what it really sets is how
+         big a segment grows before it is flushed: roughly this divided by the number
+         of concurrent uploads. At 2 GB and the 32 parallel uploads the Kubernetes
+         loader runs, that is ~64 MB a segment where 512 MB would have given ~16 MB,
+         so four times fewer segments for the merges to work through afterwards.
+         Comfortably inside the 31G load heap, and nowhere near Lucene's per-thread
+         hard limit (ramPerThreadHardLimitMB, 1945 MB). -->
+    <ramBufferSizeMB>2048</ramBufferSizeMB>
+  </indexConfig>
+
+  <updateHandler class="solr.DirectUpdateHandler2">
+    <!-- Required for durability and for the _version_ field. -->
+    <updateLog>
+      <str name="dir">${solr.ulog.dir:}</str>
+    </updateLog>
+
+    <!-- Flushes to disk every 15s during a load so the transaction log cannot grow
+         without bound. openSearcher=false because nothing needs to *see* the
+         documents until the loader's single commit at the end. -->
+    <autoCommit>
+      <maxTime>${solr.autoCommit.maxTime:15000}</maxTime>
+      <openSearcher>false</openSearcher>
+    </autoCommit>
+
+    <!-- Disabled (-1). The bulk load does one explicit commit at the end, and serving
+         is read-only, so there is nothing to soft-commit. -->
+    <autoSoftCommit>
+      <maxTime>${solr.autoSoftCommit.maxTime:-1}</maxTime>
+    </autoSoftCommit>
+  </updateHandler>
+
+  <query>
+    <filterCache size="512" initialSize="512" autowarmCount="0"/>
+
+    <!-- Grown from 512 entries (56% hit rate, 317K evictions in production). Setting
+         maxRamMB bounds the cache by RAM and makes size/initialSize ignored, so they
+         are not set here. See NameResolution#266.
+
+         class is pinned because maxRamMB is a CaffeineCache feature. CaffeineCache is
+         Solr's default today, but if a later release changed that default to an impl
+         without RAM accounting, maxRamMB would be silently ignored and this cache
+         would grow unbounded. The size-based caches above do not pin it, since an
+         entry count is honoured by any cache implementation. -->
+    <queryResultCache class="solr.CaffeineCache" maxRamMB="512" autowarmCount="0"/>
+
+    <documentCache size="512" initialSize="512" autowarmCount="0"/>
+
+    <!-- Make requests wait for the searcher to be registered rather than being served
+         from one that is not ready yet. Note that this is all it does here: with
+         autowarmCount=0 above and no firstSearcher/newSearcher listeners declared,
+         there is no cache warming for it to wait on. It matters at core startup, which
+         is the only time a NameRes searcher is opened, since serving is read-only. -->
+    <useColdSearcher>false</useColdSearcher>
+  </query>
+
+  <requestDispatcher>
+    <requestParsers enableRemoteStreaming="false" />
+  </requestDispatcher>
+
+  <!-- /select serves every NameRes query: api/server.py POSTs a JSON Request API body
+       using edismax (see the qf/pf boosts there). -->
+  <requestHandler name="/select" class="solr.SearchHandler">
+    <lst name="defaults">
+      <str name="echoParams">explicit</str>
+      <int name="rows">10</int>
+    </lst>
+  </requestHandler>
+
+  <!-- /query is used by the loader, not by the API: setup-and-load-solr.sh counts
+       documents through it to verify a load, and CI uses it to check a restored
+       backup. Cheap to keep, and removing it would break the load guard. -->
+  <requestHandler name="/query" class="solr.SearchHandler">
+    <lst name="defaults">
+      <str name="echoParams">explicit</str>
+      <str name="wt">json</str>
+      <str name="indent">true</str>
+    </lst>
+  </requestHandler>
+
+  <!-- Referenced by name from the load URL: the loader posts to
+       /update/json/docs?processor=uuid&amp;uuid.fieldName=id, which is what gives every
+       Babel document its uniqueKey. Deleting this breaks loading entirely.
+
+       This is the only update processor we declare. Solr's _default configset also
+       ships an "add-unknown-fields-to-the-schema" chain that invents fields for
+       unrecognised keys; we deliberately do not, so an unexpected key in a Babel file
+       is an error rather than a silent schema change. -->
+  <updateProcessor class="solr.UUIDUpdateProcessorFactory" name="uuid"/>
+
+</config>

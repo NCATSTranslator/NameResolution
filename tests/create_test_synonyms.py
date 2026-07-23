@@ -13,7 +13,12 @@ allcuries.update(parkinson_curies)
 
 smallsyns = list(filter( lambda x: x['curie'] in allcuries , syns ))
 
+# Write as JSON-lines (one JSON document per line), matching the format of the
+# Babel synonym files that are loaded in production. The loader counts lines to
+# verify every document made it into Solr, so the format must match.
 with open('tests/data/test-synonyms.json','w') as outf:
-    json.dump(smallsyns,outf,indent=1)
+    for syn in smallsyns:
+        outf.write(json.dumps(syn))
+        outf.write('\n')
 
 
