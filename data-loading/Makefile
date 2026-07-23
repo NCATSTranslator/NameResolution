@@ -12,7 +12,7 @@ SHELL := /bin/bash
 
 # Configuration. These use ?= so that they can be overridden from the environment
 # (e.g. from a Kubernetes pod spec) without editing this file.
-SYNONYMS_URL ?= https://stars.renci.org/var/babel_outputs/2025sep1/synonyms/
+SYNONYMS_URL ?= https://stars.renci.org/var/babel_outputs/2026jul22/synonyms/
 
 # Solr's heap during the load. `solr -m` sets BOTH -Xms and -Xmx, so this is
 # committed, not just a ceiling.

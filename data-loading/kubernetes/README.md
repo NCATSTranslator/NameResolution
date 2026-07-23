@@ -197,7 +197,7 @@ the pod spec (the Makefile uses `?=`).
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `SYNONYMS_URL` | Babel 2025sep1 | Which Babel release to load. |
+| `SYNONYMS_URL` | Babel 2026jul22 | Which Babel release to load. |
 | `SOLR_MEM` | `31G` | Solr's heap during the load (`-Xms` and `-Xmx`). |
 | `LOAD_PARALLELISM` | CPU limit | Concurrent uploads. Only set this to override the cgroup-derived default. |
 | `SPLIT_SIZE` / `SPLIT_LINES` | `2G` / 10M | How the big synonym files are split. More, smaller chunks give the parallel loader a shorter tail at the end of the run; fewer, larger ones mean less `split` time up front. |
