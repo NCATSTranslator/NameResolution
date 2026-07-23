@@ -4,6 +4,11 @@
 # exec in and drive the load by hand (see README.md in this directory). The command
 # below deliberately replaces the image's entrypoint, which would otherwise start a
 # Solr of its own -- the Makefile starts Solr itself, using SOLR_MEM as its heap.
+#
+# The index lives on a node-local NVMe volume that is created and destroyed with the
+# pod; the synonym files and the finished backup live on a persistent volume that
+# does not. Deleting this pod therefore throws away the index and keeps the work
+# that was expensive to fetch. See README.md.
 
 apiVersion: v1
 kind: Pod
@@ -49,10 +54,38 @@ spec:
         ephemeral-storage: "1G"
         memory: "96Gi"
         cpu: "16"
+  # The image runs as nru, uid/gid 1000. fsGroup makes the kubelet hand the NVMe
+  # volume over to that group; without it the volume is root-owned and Solr cannot
+  # write a thing. runAsUser only restates what the image already does.
+  securityContext:
+    runAsUser: 1000
+    fsGroup: 1000
   volumes:
+    # The index goes on a node-local NVMe volume. It is the right thing to put there
+    # twice over: it takes the whole write load of the indexing run and then the
+    # read-and-write of the optimize, so it is the volume that benefits most from the
+    # speed -- and it is pure intermediate state, so losing it with the pod costs
+    # nothing that cannot be rebuilt from the synonym files next door.
+    #
+    # This is a *generic ephemeral volume*: created with the pod and deleted with it.
+    # Not to be confused with the `ephemeral-storage` resource above, which is the
+    # node's own scratch space for the container filesystem.
+    #
+    # Sizing is the same 2-3x-the-index rule as before (optimize writes the new
+    # segment before dropping the old ones), so this has to fit on the node's local
+    # NVMe. If no node has that much, use nameres-loading-solr.k8s.yaml instead --
+    # see README.md, "If the NVMe volume does not fit".
     - name: nameres-loading-solr
-      persistentVolumeClaim:
-        claimName: nameres-loading-solr
+      ephemeral:
+        volumeClaimTemplate:
+          spec:
+            accessModes: [ "ReadWriteOnce" ]
+            storageClassName: nvme-ephemeral
+            resources:
+              requests:
+                storage: 400Gi
+    # This one stays persistent: it holds the ~130G download and, at the end, the
+    # backup tarball, which is the only thing the whole exercise produces.
     - name: nameres-loading-data
       persistentVolumeClaim:
         claimName: nameres-loading-data

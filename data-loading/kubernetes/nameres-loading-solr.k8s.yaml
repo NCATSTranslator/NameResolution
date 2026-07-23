@@ -1,5 +1,12 @@
 # Kubernetes file for setting up a PVC to use for nameres-loading.
 #
+# FALLBACK ONLY. The pod normally puts the Solr home on a node-local NVMe ephemeral
+# volume, declared inline in nameres-loading.k8s.yaml -- it is faster and the index
+# is disposable. Use this PVC instead only when no node has enough local NVMe for
+# the whole index; see "If the NVMe volume does not fit" in README.md. Do not apply
+# it otherwise, or you will reserve several hundred GB of network storage that
+# nothing mounts.
+#
 # This is the Solr home (/var/solr): it holds the name_lookup core, which is the
 # index itself and, at the end, the thing that gets tarred into the backup.
 #
