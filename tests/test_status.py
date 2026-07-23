@@ -44,16 +44,23 @@ def test_status_shape():
     assert 'mean_time_ms' in rq
     assert 'mean_solr_time_ms' in rq
 
-    # solr_metrics should be present but with only a message unless ?metrics=true is passed.
+    # solr_metrics should be present but with only a message unless ?full=true is passed.
     assert 'solr_metrics' in data and 'message' in data['solr_metrics']
+    # api_node_memory is only populated with ?full=true.
+    assert data.get('api_node_memory') is None
 
 
 def test_status_metrics_param():
-    """With ?metrics=true, solr_metrics is included and has the expected structure."""
+    """With ?full=true, solr_metrics is included and has the expected structure."""
     client = TestClient(app)
-    response = client.get("/status", params={'metrics': 'true'})
+    response = client.get("/status", params={'full': 'true'})
     assert response.status_code == 200
     data = response.json()
+
+    # api_node_memory is present (a dict) with ?full=true on Linux, or None off Linux
+    # (e.g. macOS dev boxes) — either way the key must exist.
+    assert 'api_node_memory' in data
+    assert data['api_node_memory'] is None or 'cached_mb' in data['api_node_memory']
 
     assert 'solr_metrics' in data
     # solr_metrics may be None if Solr's metrics API is unavailable, but if present

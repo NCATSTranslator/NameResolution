@@ -335,8 +335,8 @@ Solr database.
   "lastModified": "2025-09-24T19:09:56.524Z",
   "size": "142.17 GB",
   "recent_queries": {
-    "max": 1000,
-    "count": 1000,
+    "max": 50000,
+    "count": 50000,
     "mean_time_ms": 42.3,
     "mean_solr_time_ms": 38.1
   },
@@ -372,15 +372,26 @@ Solr database.
       "open_file_descriptors": 412,
       "max_file_descriptors": 1048576
     }
+  },
+  "api_node_memory": {
+    "mem_total_mb": 65536.0,
+    "mem_available_mb": 5120.0,
+    "buffers_mb": 210.0,
+    "cached_mb": 48100.0,
+    "note": "Memory of the NameRes API node; equals the Solr node only if they are co-located."
   }
 }
 ```
 
-`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `max` is the size of the tracking window (default 1000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `count` is how many queries have actually been recorded so far. `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. Both means are `null` if no queries have been handled since startup.
+`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `max` is the size of the tracking window (default 50000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `count` is how many queries have actually been recorded so far. `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. Both means are `null` if no queries have been handled since startup.
 
-`solr_metrics` is only populated when the `?metrics=true` query parameter is passed, as fetching it requires an additional round-trip to Solr. Otherwise the field holds a short `{"message": ...}` placeholder rather than the metrics shown above. When requested, it is populated directly from Solr's `/admin/metrics` API and provides native Solr health indicators. Any individual field is `null` when the underlying Solr metric is unavailable (e.g. a cache that isn't configured); if the whole metrics API is unreachable, the placeholder message is retained. The sub-blocks are:
+`solr_metrics` and `api_node_memory` are only populated when the `?full=true` query parameter is passed, as fetching them requires an additional round-trip to Solr (and a local file read); the default `/status` stays cheap for Kubernetes liveness probes. Without `?full=true`, `solr_metrics` holds a short `{"message": ...}` placeholder and `api_node_memory` is `null`.
+
+`solr_metrics` is populated directly from Solr's `/admin/metrics` API and provides native Solr health indicators. Any individual field is `null` when the underlying Solr metric is unavailable (e.g. a cache that isn't configured); if the whole metrics API is unreachable, the placeholder message is retained. The sub-blocks are:
 
 - `query_handler` — cumulative `/select` request count plus error/timeout counts and latency percentiles (`p75_ms`/`p95_ms`/`p99_ms`). A widening gap between `mean_ms` and `p99_ms`, or non-zero `timeouts`, indicates Solr-side strain.
 - `cache` — queryResultCache `hitratio`, `evictions`, and `size`. A low hit ratio with high evictions means the cache is undersized for the query mix.
 - `jvm` — Solr's heap (`heap_used_mb`/`heap_max_mb`/`heap_used_pct`), process `cpu_load`, and cumulative GC activity (`gc_count`/`gc_time_ms`). Rising `gc_time_ms` relative to uptime signals heap pressure.
-- `host` — the machine Solr runs on, for **sizing the pod's CPU/memory requests**: `available_processors`, `system_load_average`, `system_cpu_load`, and physical memory (`total_physical_mem_mb`/`free_physical_mem_mb`). Because Solr mmaps its index, physical memory beyond the heap becomes OS page cache for the (read-only) index — so the pod generally wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`.
+- `host` — the machine Solr runs on, for **sizing the pod's CPU/memory requests**: `available_processors`, `system_load_average`, `system_cpu_load`, and physical memory (`total_physical_mem_mb`/`free_physical_mem_mb`). Because Solr mmaps its index, physical memory beyond the heap becomes OS page cache for the (read-only) index — so the pod generally wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. Note that `free_physical_mem_mb` comes from Solr's JVM and reports Linux `MemFree` (which *excludes* page cache), so it reads low on a warm node — see `api_node_memory` below for the page-cache view.
+
+`api_node_memory` reports OS page-cache stats (`buffers_mb`, `cached_mb`, `mem_available_mb`, `mem_total_mb`) read from the NameRes **API node's** `/proc/meminfo`. High `cached_mb` means the index is well-served from page cache; a low value on a busy node points at cache thrashing and a memory-starved Solr. Two caveats: (1) this is the API node, which **equals the Solr node only when the two are co-located** — Solr's own metrics API cannot report page cache, so there is no way to read the Solr node's cache remotely through this endpoint; and (2) it is `null` on non-Linux hosts. For a robust Solr-node view regardless of topology, run a node-level exporter (e.g. node_exporter/Prometheus) on the Solr host.
