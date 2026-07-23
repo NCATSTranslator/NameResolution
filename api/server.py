@@ -22,6 +22,9 @@ from api.apidocs import get_app_info, construct_open_api_schema
 
 SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
 SOLR_PORT = os.getenv("SOLR_PORT", "8983")
+# The Solr core to query. In standalone mode this is the core name; the cloud-mode
+# backups we used to ship called it name_lookup_shard1_replica_n1 instead (see status()).
+SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
@@ -83,10 +86,16 @@ async def status() -> Dict:
     if 'version' in app_info and app_info['version']:
         nameres_version = 'v' + app_info['version']
 
-    # We should have a status for name_lookup_shard1_replica_n1.
-    if 'status' in result and 'name_lookup_shard1_replica_n1' in result['status']:
-        core = result['status']['name_lookup_shard1_replica_n1']
+    # We should have a status for our core. Standalone Solr calls it ${SOLR_CORE}
+    # (name_lookup); the older cloud-mode backups called it
+    # name_lookup_shard1_replica_n1. A NameRes Solr only ever has one core, so if the
+    # expected name isn't there but there is exactly one core, report on that one.
+    cores = result.get('status', {})
+    core = cores.get(SOLR_CORE)
+    if core is None and len(cores) == 1:
+        core = next(iter(cores.values()))
 
+    if core is not None:
         index = {}
         if 'index' in core:
             index = core['index']
@@ -219,7 +228,7 @@ async def synonyms_post(
 async def name_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
     time_start = time.time_ns()
-    query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
+    query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/{SOLR_CORE}/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
         for curie in curies
@@ -534,7 +543,7 @@ async def lookup(string: str,
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
     time_solr_start = time.time_ns()
-    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/name_lookup/select"
+    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/{SOLR_CORE}/select"
     async with httpx.AsyncClient(timeout=None) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
