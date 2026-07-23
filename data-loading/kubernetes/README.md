@@ -8,39 +8,39 @@ tell, from Grafana, whether it has the right ones.
 
 | File | What it is |
 | --- | --- |
-| `nameres-loading.k8s.yaml` | The pod. A workspace you exec into, not a job. Declares the NVMe volume inline. |
+| `nameres-loading.k8s.yaml` | The pod. A workspace you exec into, not a job. |
+| `nameres-loading-solr.k8s.yaml` | PVC mounted at `/var/solr` -- the Solr home, i.e. the index. |
 | `nameres-loading-data.k8s.yaml` | PVC mounted at `data/` -- synonym files in, tarball out. |
-| `nameres-loading-solr.k8s.yaml` | Fallback PVC for `/var/solr`, for when the NVMe volume does not fit. Normally unused. |
 
-## Two volumes, and why they differ
+## Two volumes
 
-The pod mounts two volumes, and the difference between them is the whole design:
+- **`/var/solr`, the index.** Takes the entire write load of the indexing run and then
+  the read-and-write of the optimize, so its throughput is what decides how long a
+  load takes. Pure intermediate state: once the tarball exists the index is worthless.
+- **`data/`, the working directory.** Holds the ~130G download and, at the end, the
+  backup tarball -- the only thing the whole exercise actually produces.
 
-- **`/var/solr`, the index** is on a **node-local NVMe ephemeral volume**, declared
-  inline in the pod. It absorbs the entire write load of the indexing run and then
-  the read-and-write of the optimize, so it is the volume that benefits most from
-  being fast -- and it is pure intermediate state. Once the tarball exists, the index
-  is worthless. Losing it with the pod costs only the time to rebuild it from the
-  synonym files sitting next door.
-- **`data/`, the working directory** stays on a **persistent PVC**. It holds the
-  ~130G download and, at the end, the backup tarball -- the only thing the whole
-  exercise actually produces. That does not belong on a volume that dies with its
-  pod.
+Both are persistent PVCs today, so **both outlive the pod and both need deleting by
+hand** once the tarball is somewhere safe.
 
-So deleting the pod throws away the fast, rebuildable half and keeps the slow,
-irreplaceable half. That is deliberate.
+The index would be much better off on node-local NVMe: it is the volume that most
+wants speed, and it is the one we could afford to lose, since it can be rebuilt from
+the synonym files next door. That change is written and waiting in a separate PR,
+blocked on [issue #280](https://github.com/NCATSTranslator/NameResolution/issues/280),
+which asks for the namespace to support `nvme-ephemeral` volumes.
 
-The Makefile knows about this split: the stamp files that record "the core exists"
-and "the data is loaded" live on the Solr volume, not in `data/`, so a recreated pod
-starts from a correct picture of an empty index rather than from stamps insisting the
-work was already done. Logs go the other way, to `data/logs/`, because logs matter
-most exactly when the run has died and the Solr volume has gone with it.
+Being persistent does buy one thing in the meantime. The Makefile's stamp files --
+"the core exists", "the data is loaded" -- live on the Solr volume rather than in
+`data/`, so if the pod dies partway through, a replacement resumes exactly where it
+left off instead of reindexing from scratch. Logs go the other way, to `data/logs/`,
+because logs matter most when a run has died.
 
 ## Running a load
 
 ```shell
+$ kubectl apply -f nameres-loading-solr.k8s.yaml
 $ kubectl apply -f nameres-loading-data.k8s.yaml
-$ kubectl apply -f nameres-loading.k8s.yaml     # creates the NVMe volume with it
+$ kubectl apply -f nameres-loading.k8s.yaml
 $ kubectl exec -it nameres-loading -- /bin/bash
 
 # Inside the pod:
@@ -72,15 +72,14 @@ effect.
 `name_lookup` core from the checked-in configset and loads it. `make
 data/backup.done` optimizes the index, stops Solr and writes
 `data/snapshot.backup.tar.gz`. Copy that out (`kubectl cp`, or push it straight to
-wherever `dataUrl` will point) **before deleting the pod**, then delete the pod and
-the data PVC. The NVMe volume goes away with the pod on its own.
+wherever `dataUrl` will point), then delete the pod and **both** PVCs -- they are
+persistent, and between them they hold around a terabyte.
 
 Run it under `screen` or `tmux`: a full load is hours long, and `kubectl exec` does
 not survive a dropped connection.
 
-If the pod dies partway through, recreate it and run the same commands. The synonym
-files are still there and will not be downloaded again; the index will be rebuilt
-from scratch, because it went with the NVMe volume.
+If the pod dies partway through, recreate it and run the same commands: both volumes
+survive, so make picks up from the last completed step rather than starting over.
 
 ## What actually costs time
 
@@ -105,7 +104,7 @@ nothing but the absence of failure.
 CPU and `pigz` gets the same number, so raising `cpu` in the pod spec is picked up
 automatically; there is no second setting to keep in sync. The pod asks for 32,
 which is deliberately short of what the namespace has spare: the real limit is that
-the request has to fit on a **single node**, with the NVMe volume, at the same time.
+the request has to fit on a **single node**.
 Namespace quota is the easy test to pass and the wrong one to plan against -- check
 `kubectl describe node` before raising this. Note that both numbers
 come from the cgroup *limit* via [`../available-cpus.sh`](../available-cpus.sh), not
@@ -130,39 +129,23 @@ Solr RSS against 111Gi of page cache (see `solr.resources` in the chart's
 **Disk space** is a floor, not a lever:
 
 - `/var/solr` needs **2-3x the finished index**, because `optimize=true` writes the
-  new single segment before deleting the old ones. 400Gi against a ~127Gi index is
-  about 3x; if the index passes ~140Gi, raise it. This now has to fit on a single
-  node's local NVMe, which is the one new constraint the fast volume brings.
+  new single segment before deleting the old ones. It is 600Gi, sized for an index
+  well above the ~127Gi measured for Babel 2025nov4, because releases grow and running
+  out of room happens during the optimize -- the last step of a multi-hour load.
 - `data/` needs the uncompressed synonyms plus the tarball. It no longer needs room
   for an uncompressed copy of the backup -- that staging step is gone.
 
-**Disk speed** is a lever, and possibly the biggest one, which is why the index sits
-on `storageClassName: nvme-ephemeral`. Steps 3 and 4 above are bounded by how fast
-this volume can be written and re-read; no amount of Makefile tuning substitutes for
-that. `data/` stays on `basic`, because it is written once by `wget` at network speed
-and read once, sequentially, by the loader.
+**Disk speed** is a lever, and probably the biggest one left. Both PVCs use
+`storageClassName: basic`, so the index sits on network storage and the merge and
+optimize phases are bounded by it -- no amount of Makefile tuning substitutes for the
+volume being fast.
 
-### If the NVMe volume does not fit
-
-Local NVMe is a slice of a real disk on a real node, so a 400Gi request may not be
-schedulable anywhere. If the pod stays `Pending` with a message about the volume,
-either lower the request (it cannot go below roughly 2x the finished index) or fall
-back to network storage:
-
-```shell
-$ kubectl apply -f nameres-loading-solr.k8s.yaml
-```
-
-and in `nameres-loading.k8s.yaml`, replace the `ephemeral:` block on the
-`nameres-loading-solr` volume with:
-
-```yaml
-      persistentVolumeClaim:
-        claimName: nameres-loading-solr
-```
-
-The load then works exactly as before, just slower through the merge and optimize
-steps. Nothing else needs changing -- the stamp files follow `SOLR_DIR` either way.
+Moving the index onto a node-local NVMe ephemeral volume is written and ready in a
+separate PR, blocked on
+[issue #280](https://github.com/NCATSTranslator/NameResolution/issues/280): the
+namespace cannot currently create `nvme-ephemeral` volumes. When that lands, the swap
+is one block in `nameres-loading.k8s.yaml` and nothing else changes -- the stamp files
+follow `SOLR_DIR` either way.
 
 ## Watching a load in Grafana
 
@@ -175,7 +158,7 @@ time.
 | **CPU usage vs. limit** | Flat at the limit during the load = CPU-bound, and more will help. Well below it = something else is the constraint, probably disk. | If it is below the limit, look at disk before adding CPU. |
 | **Memory usage (RSS/WSS)** | This is roughly the JVM. It should sit near `SOLR_MEM` and be stable. | If it is far below `SOLR_MEM`, lower `SOLR_MEM` and give the memory back as cache. |
 | **Memory usage (cache)** | Page cache: the index data the kernel is holding. Rising to fill the headroom is healthy. | If it is pinned at (limit - heap) for the whole run, more memory may speed up merges. |
-| **Disk read/write throughput on the Solr volume** | Flat-topped during merges and the optimize = saturated volume. On NVMe this should no longer be what you are waiting for; if it still is, the CPU is not the constraint and neither is the heap. | Check the volume really is NVMe (`kubectl get pvc` while the pod runs, and look at the storage class). |
+| **Disk read/write throughput on the Solr volume** | Flat-topped during merges and the optimize = saturated volume. Expected on `basic` storage, and the main argument for issue #280. | Nothing to tune here; it is the storage class. |
 | **Wall-clock time of each `make` step** | The logs in `data/logs/` are timestamped per step. | Tells you which of the five phases above to attack at all. |
 
 Two things worth checking specifically, since they are new:
