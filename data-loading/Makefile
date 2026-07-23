@@ -37,7 +37,10 @@ NCPU := $(shell bash ./available-cpus.sh 2>/dev/null || getconf _NPROCESSORS_ONL
 GZIP_CMD := $(shell command -v pigz > /dev/null 2>&1 && echo "pigz -p $(NCPU)" || echo gzip)
 
 # The checked-in configset used to create the core (contains conf/).
-CONFIGSET=configsets/name_lookup
+# Absolute, and it has to be: `solr create -d` resolves a *relative* path against
+# Solr's own server/solr/configsets directory, not the working directory, so a
+# relative path here fails with "Can't find resource 'solrconfig.xml'".
+CONFIGSET ?= $(CURDIR)/configsets/name_lookup
 
 # The Solr core name. Do not change without also changing NameRes and the configset.
 CORE=name_lookup
@@ -59,7 +62,7 @@ SOLR_DIR ?= /var/solr
 # they have to disappear along with it. Keeping them in data/, which is a separate
 # and persistent volume, would mean a recreated pod found an empty index and a set
 # of stamps swearing it had been loaded.
-SOLR_PID = ${SOLR_DIR}/solr.pid
+SOLR_STARTED = ${SOLR_DIR}/solr.started
 CORE_DONE = ${SOLR_DIR}/core.done
 SETUP_DONE = ${SOLR_DIR}/setup.done
 
@@ -80,7 +83,7 @@ all: ${SETUP_DONE}
 clean:
 	rm -rf data/*
 	mkdir data
-	rm -f ${SOLR_PID} ${CORE_DONE} ${SETUP_DONE}
+	rm -f ${SOLR_STARTED} ${CORE_DONE} ${SETUP_DONE}
 
 # Step 1. Download and uncompress synonym files, then split the large ones so the
 # parallel loader has more units of work.
@@ -99,28 +102,31 @@ data/synonyms/done:
 
 # Step 2. Start the Solr server (standalone -- no ZooKeeper needed for one node).
 # --user-managed keeps standalone mode explicit (Solr 10 will default to cloud).
-${SOLR_PID}:
+${SOLR_STARTED}:
 	mkdir -p ${LOG_DIR}
 	SOLR_LOGS_DIR=${LOG_DIR} ${SOLR_EXEC} start -p 8983 --user-managed -v -m ${SOLR_MEM} -s ${SOLR_DIR} >> ${LOG_DIR}/solr.txt 2>> ${LOG_DIR}/solr.err.txt
-	# Bounded, with a sleep: a Solr that fails to start should stop the build rather
-	# than spin a CPU forever.
-	@tries=0; while [ ! -s $@ ]; do \
+	# Wait for Solr to actually answer, then stamp. This used to parse `solr status`
+	# for a PID, which reports "No Solr nodes are running" against a perfectly healthy
+	# Solr in a container -- the stock solr image does it too -- so the loop never
+	# terminated. Nothing ever used the PID (stop-solr stops Solr by port), so asking
+	# the admin endpoint whether Solr is up is both simpler and the actual question.
+	# Bounded, so a Solr that fails to start stops the build instead of hanging it.
+	@tries=0; until curl -sf 'http://localhost:8983/solr/admin/cores?action=STATUS' > /dev/null 2>&1; do \
 		tries=$$((tries + 1)); \
 		if [ $$tries -gt 60 ]; then \
 			echo "Solr did not start after two minutes; see ${LOG_DIR}/solr.err.txt" >&2; \
 			exit 1; \
 		fi; \
 		sleep 2; \
-		${SOLR_EXEC} status | grep -Po 'Solr process \K([0-9]+)' > $@; \
 	done
-	$(info Solr started with PID file at $@)
-	cat $@
+	@date -u '+Solr started at %Y-%m-%dT%H:%M:%SZ on port 8983' > $@
+	@cat $@
 
 # Step 3. Create the core from the checked-in configset (schema lives there).
 # solr.pid is order-only (after the |): the core needs a running Solr, but restarting
 # Solr must not make the core look stale -- re-running `solr create` on a core that
 # already exists is an error.
-${CORE_DONE}: | ${SOLR_PID}
+${CORE_DONE}: | ${SOLR_STARTED}
 	${SOLR_EXEC} create -c ${CORE} -d ${CONFIGSET}
 	touch $@
 
@@ -135,18 +141,18 @@ ${SETUP_DONE}: data/synonyms/done ${CORE_DONE}
 # The PID file is an order-only prerequisite because optimizing needs a *running*
 # Solr: the stamps survive a container restart, but the server does not, so a
 # restarted container should start Solr again rather than fail here.
-data/backup.done: ${SETUP_DONE} | ${SOLR_PID}
+data/backup.done: ${SETUP_DONE} | ${SOLR_STARTED}
 	@echo "Optimizing the index before export (this can take a while on a large index)..."
 	curl -sf --show-error 'http://localhost:8983/solr/${CORE}/update?optimize=true'
 	# The optimize above commits, so the on-disk index is consistent. `solr stop`
 	# can exit non-zero under Docker even on a clean stop (SOLR-16463), so ignore it.
 	${SOLR_EXEC} stop -p 8983 || true
-	rm -f ${SOLR_PID}
+	rm -f ${SOLR_STARTED}
 	set -o pipefail; tar -C ${SOLR_DIR} -cf - ${CORE} | ${GZIP_CMD} > data/snapshot.backup.tar.gz
 	touch $@
 
 .PHONY: stop-solr
 stop-solr:
-	rm -f ${SOLR_PID}
+	rm -f ${SOLR_STARTED}
 	${SOLR_EXEC} stop -p 8983 || true
 	$(info Solr stopped.)
