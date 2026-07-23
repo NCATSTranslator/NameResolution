@@ -46,38 +46,6 @@ RECENT_TIMES_COUNT = int(os.getenv("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_CO
 recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
 recent_solr_times = deque(maxlen=RECENT_TIMES_COUNT)
 
-
-def read_api_node_meminfo():
-    """Best-effort read of THIS (NameRes API) node's /proc/meminfo, in MB.
-
-    This is the node the API runs on, which only matches the Solr node when the two
-    are co-located. Solr's own metrics API cannot report OS page cache (its JMX
-    freePhysicalMemorySize is Linux MemFree, which excludes cache), so this local
-    read is the only page-cache signal available, and only a meaningful one for Solr
-    when API and Solr share a host. Returns None on non-Linux hosts or read errors.
-    """
-    try:
-        fields = {}
-        with open('/proc/meminfo') as f:
-            for line in f:
-                key, _, rest = line.partition(':')
-                parts = rest.split()
-                if parts:
-                    fields[key] = int(parts[0])  # values are in kB
-    except (OSError, ValueError):
-        return None
-
-    def mb(k):
-        return round(fields[k] / 1024, 1) if k in fields else None
-
-    return {
-        'mem_total_mb': mb('MemTotal'),
-        'mem_available_mb': mb('MemAvailable'),
-        'buffers_mb': mb('Buffers'),
-        'cached_mb': mb('Cached'),
-        'note': 'Memory of the NameRes API node; equals the Solr node only if they are co-located.',
-    }
-
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
 @app.get("/", include_in_schema=False)
@@ -225,10 +193,6 @@ async def status(full: bool = False) -> Dict:
         'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
     }
 
-    # OS page-cache stats from the API node's /proc/meminfo (only meaningful for Solr
-    # when co-located). Gated behind ?full=true and null on non-Linux hosts.
-    api_node_memory = read_api_node_meminfo() if full else None
-
     # We should have a status for our core. Standalone Solr calls it ${SOLR_CORE}
     # (name_lookup); the older cloud-mode backups called it
     # name_lookup_shard1_replica_n1. A NameRes Solr only ever has one core, so if the
@@ -268,7 +232,6 @@ async def status(full: bool = False) -> Dict:
             'size': index.get('size', ''),
             'recent_queries': recent_queries,
             'solr_metrics': solr_metrics,
-            'api_node_memory': api_node_memory,
         }
     else:
         return {
@@ -284,7 +247,6 @@ async def status(full: bool = False) -> Dict:
             'recent_queries': recent_queries,
             'nameres_version': nameres_version,
             'solr_metrics': solr_metrics,
-            'api_node_memory': api_node_memory,
         }
 
 
