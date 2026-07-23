@@ -27,6 +27,57 @@ documents before loading and compares against Solr's document count afterward**,
 and every upload uses `curl --fail`. A failed upload or a count mismatch aborts
 with a non-zero exit code.
 
+## The configset
+
+Two files, ~220 lines: [`solrconfig.xml`](configsets/name_lookup/conf/solrconfig.xml)
+and [`managed-schema.xml`](configsets/name_lookup/conf/managed-schema.xml). They are
+written for NameRes rather than copied from Solr's `_default` configset, and that is
+the point: **everything in them is a decision we made**, so there is nothing to
+reconcile against upstream when Solr is upgraded, and nothing pinned that we never
+chose. Solr supplies the defaults for everything we leave out, and the handlers we
+do not declare (`/update`, `/update/json/docs`, `/admin/ping`, `/admin/*`) are
+registered implicitly.
+
+This replaced a wholesale copy of `_default`: 44 files, 70 field types and 69 dynamic
+fields, of which NameRes used 6 field types and 13 fields. 42 of those files were
+language-specific stopword and contraction lists, which could never have done
+anything here -- Babel synonyms carry no language, and neither of our two field types
+stems, removes stopwords or applies synonyms.
+
+Two consequences worth knowing:
+
+- **The schema is immutable.** `schemaFactory` declares `mutable=false`, so the Schema
+  API refuses to write and this file cannot drift from a live core. (Left undeclared,
+  Solr defaults to a *mutable* managed schema -- the same trap as the
+  `configoverlay.json` that used to live here.) The only thing that modifies a live
+  index is the Helm blocklist step, which deletes documents by query and needs no
+  schema change.
+- **An unexpected Babel key is now an error.** With no dynamic fields and no
+  schemaless mode, a synonym file containing a key we did not declare fails the load
+  with `unknown field` instead of having a field invented for it. If Babel's output
+  gains a field, add it to the schema deliberately.
+
+### Upgrading Solr
+
+Bump the image tag and let CI do the work: it creates a core from this configset,
+loads it, queries it and round-trips a backup, so anything removed or renamed upstream
+turns CI red at core creation. If you want to see what changed in Solr's own defaults,
+diff against the `_default` configset inside the image:
+
+```shell
+$ docker run --rm --entrypoint cat solr:9.10 \
+    /opt/solr/server/solr/configsets/_default/conf/solrconfig.xml > /tmp/upstream.xml
+$ diff /tmp/upstream.xml configsets/name_lookup/conf/solrconfig.xml
+```
+
+Expect that diff to be enormous and mostly uninteresting -- it is the 900 lines of
+upstream commentary and examples we are deliberately not carrying. It is useful for
+spotting a renamed element, not as a routine check.
+
+`luceneMatchVersion` controls analyzer back-compatibility, not which Solr this runs
+on. It does not need to track the release, and changing it can change how text is
+analysed, so it should only move together with a reindex.
+
 ## Using the Makefile
 
 The Makefile runs the whole pipeline. It expects `SOLR_DIR` (the Solr home,
