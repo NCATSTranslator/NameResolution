@@ -78,7 +78,9 @@ pip install -r requirements.txt
 - `GET /reverse-lookup` - CURIE-to-names lookup
 - `POST /synonyms` - Get synonyms for a list of CURIEs
 - `POST /lookup-curies` - Filter existing CURIEs with type subsetting
-- `GET /status` - Health check with Solr document counts
+- `GET /status` - Health check with Solr document counts, plus recent-query latency. Pass `?full=true` for Solr/JVM/host metrics (adds a Solr round-trip, so the default path stays cheap for k8s probes).
+
+When adding a field from Solr's `/admin/metrics`, check the response shape against a live Solr first: the encoding varies by metric type, and a wrong guess silently yields `null` rather than an error. Counters (`QUERY./select.requests`) are scalars, timers (`requestTimes`) and meters (`errors`/`timeouts`) are nested objects, and JVM gauges (`memory.heap.used`) come back as *flat dotted keys*, not a nested `memory.heap` map.
 
 ### Data Model
 Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and biolink type information. Lookup results are `LookupResult` objects with scoring fields. Results are conflated using GeneProtein and DrugChemical conflation rules.
@@ -91,6 +93,7 @@ Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and b
 
 ## Documentation
 - `documentation/API.md` - Endpoint reference
+- `documentation/Performance.md` - Reading the `/status` metrics; diagnosing Solr CPU/memory/load
 - `documentation/Deployment.md` - Docker/Kubernetes deployment guide
 - `documentation/Scoring.md` - Scoring algorithm details
 - `documentation/NameResolution.ipynb` - Interactive usage examples
