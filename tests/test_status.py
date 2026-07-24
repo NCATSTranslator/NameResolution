@@ -38,11 +38,13 @@ def test_status_shape():
     assert data['status'] == 'ok'
     assert 'numDocs' in data
 
-    # recent_queries should always be present; count/means are None before any queries.
+    # recent_queries should always be present; count/means/percentiles are None before any queries.
     rq = data['recent_queries']
     assert 'count' in rq
     assert 'mean_time_ms' in rq
     assert 'mean_solr_time_ms' in rq
+    # End-to-end percentiles (local, no Solr round-trip) are on the default /status path.
+    assert 'p50_ms' in rq and 'p95_ms' in rq and 'p99_ms' in rq
 
     # solr_metrics should be present but with only a message unless ?full=true is passed.
     assert 'solr_metrics' in data and 'message' in data['solr_metrics']
@@ -79,9 +81,13 @@ def test_status_metrics_param():
 def test_status_recent_queries_populated():
     """After a lookup, recent_queries should reflect at least one recorded time."""
     client = TestClient(app)
+    # Two queries so the percentile computation (needs >= 2 samples) is exercised.
     client.get("/lookup", params={'string': 'alzheimer'})
+    client.get("/lookup", params={'string': 'diabetes'})
     response = client.get("/status")
     data = response.json()
-    assert data['recent_queries']['count'] >= 1
-    assert data['recent_queries']['mean_time_ms'] is not None
-    assert data['recent_queries']['mean_solr_time_ms'] is not None
+    rq = data['recent_queries']
+    assert rq['count'] >= 2
+    assert rq['mean_time_ms'] is not None
+    assert rq['mean_solr_time_ms'] is not None
+    assert rq['p50_ms'] is not None and rq['p99_ms'] is not None

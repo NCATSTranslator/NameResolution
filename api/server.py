@@ -5,6 +5,7 @@ Queries are mostly sent to the underlying the NameRes Solr instance.
 """
 import json
 import logging
+import statistics
 import warnings
 import time
 import os
@@ -150,7 +151,7 @@ async def status(full: bool = False) -> Dict:
                             'errors': _count(core_data.get('QUERY./select.errors')),
                             'timeouts': _count(core_data.get('QUERY./select.timeouts')),
                             'mean_ms': qh.get('mean_ms'),
-                            'p75_ms': qh.get('p75_ms'),
+                            'p50_ms': qh.get('median_ms'),
                             'p95_ms': qh.get('p95_ms'),
                             'p99_ms': qh.get('p99_ms'),
                         },
@@ -167,16 +168,15 @@ async def status(full: bool = False) -> Dict:
                             'gc_time_ms': gc_time_ms,
                         },
                         # Host resources, for sizing the Solr pod's CPU/memory requests.
-                        # total/free physical memory sizes the pod: Solr mmaps the index, so
-                        # RAM beyond the heap becomes OS page cache for the (read-only) index.
+                        # total_physical_mem sizes the pod: Solr mmaps the index, so RAM beyond
+                        # the heap becomes OS page cache for the (read-only) index. (Free physical
+                        # memory is deliberately omitted: it is Linux MemFree, which excludes page
+                        # cache and so reads near-zero on a healthy node — more misleading than useful.)
                         'host': {
                             'available_processors': jvm.get('os.availableProcessors'),
                             'system_load_average': jvm.get('os.systemLoadAverage'),
                             'system_cpu_load': jvm.get('os.systemCpuLoad'),
                             'total_physical_mem_mb': _mb(jvm.get('os.totalPhysicalMemorySize')),
-                            'free_physical_mem_mb': _mb(jvm.get('os.freePhysicalMemorySize')),
-                            'open_file_descriptors': jvm.get('os.openFileDescriptorCount'),
-                            'max_file_descriptors': jvm.get('os.maxFileDescriptorCount'),
                         },
                     }
             except Exception:
@@ -201,11 +201,24 @@ async def status(full: bool = False) -> Dict:
         nameres_version = 'v' + app_info['version']
 
     # Prepare recent times for reporting.
+    # End-to-end latency percentiles over the window. These measure the full round-trip
+    # the caller sees (including NameRes processing), so comparing them against Solr's own
+    # query_handler percentiles localizes a latency tail to Solr vs. NameRes. Computed from
+    # local data (no Solr round-trip), so they stay on the default /status path.
+    if len(recent_query_times) >= 2:
+        qs = statistics.quantiles(recent_query_times, n=100)
+        p50, p95, p99 = round(qs[49], 2), round(qs[94], 2), round(qs[98], 2)
+    else:
+        p50 = p95 = p99 = None
+
     recent_queries = {
         'max': RECENT_TIMES_COUNT,
         'count': len(recent_query_times),
         'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
         'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
+        'p50_ms': p50,
+        'p95_ms': p95,
+        'p99_ms': p99,
     }
 
     # We should have a status for our core. Standalone Solr calls it ${SOLR_CORE}

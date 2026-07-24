@@ -22,10 +22,8 @@ present (no `?full=true` needed).
 |---|---|
 | `mean_time_ms` | Average round-trip time (Python → Solr → Python) over the last `count` `/lookup` queries. Rising mean = sustained slowdown. |
 | `mean_solr_time_ms` | Of that, the average time spent waiting on Solr. If this is close to `mean_time_ms`, the bottleneck is inside Solr; if it is much smaller, the bottleneck is Python-side result processing. |
+| `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `query_handler` percentiles localizes a latency tail: if the end-to-end `p99_ms` is far above `query_handler.p99_ms`, the tail is in NameRes (result processing, GC in the Python process), not Solr. Computed locally, so they need no `?full=true` round-trip. |
 | `count` / `max` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). |
-
-For latency percentiles, use `solr_metrics.query_handler` below — Solr computes them over its
-own `/select` histogram.
 
 ### Solr query handler (`solr_metrics.query_handler`)
 
@@ -36,7 +34,7 @@ Cumulative `/select` statistics straight from Solr.
 | `requests` | Total `/select` requests handled since Solr started. Sample it twice to get a rate. |
 | `errors` / `timeouts` | Cumulative counts. Any non-zero `timeouts` means Solr is dropping queries under load. |
 | `mean_ms` | Mean Solr-side request time. |
-| `p75_ms` / `p95_ms` / `p99_ms` | Latency percentiles. `p99_ms` spiking while `mean_ms`/`p75_ms` stay stable = occasional GC pauses or one-off expensive queries; all of them rising = sustained overload. |
+| `p50_ms` / `p95_ms` / `p99_ms` | Solr-side latency percentiles. `p99_ms` spiking while `p50_ms` stays stable = occasional GC pauses or one-off expensive queries; all of them rising = sustained overload. Compare against `recent_queries` percentiles to tell Solr-side tails from NameRes-side ones. |
 
 ### Index health (top level of `/status`)
 
@@ -63,7 +61,7 @@ The machine Solr runs on — use these to **size the Solr pod's CPU/memory reque
 |---|---|
 | `available_processors` | CPUs visible to Solr. |
 | `system_load_average` / `system_cpu_load` | Host-wide load and CPU (0.0–1.0). If `system_cpu_load` is higher than `jvm.cpu_load`, other processes are competing with Solr. |
-| `total_physical_mem_mb` / `free_physical_mem_mb` | Host RAM. Because Solr mmaps its read-only index, RAM beyond the heap becomes OS page cache for the index, so the host wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. Note `free_physical_mem_mb` is Linux `MemFree` and *excludes* page cache, so it reads low on a warm node — that is expected, not a problem. |
+| `total_physical_mem_mb` | Host RAM. Because Solr mmaps its read-only index, RAM beyond the heap becomes OS page cache for the index, so the host wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. (Free physical memory is not reported: Solr's JVM exposes only Linux `MemFree`, which excludes page cache and reads near-zero on a healthy node.) |
 
 ### Caches (`solr_metrics.cache`)
 
@@ -147,13 +145,16 @@ Solr seems slow or the service is unresponsive
 │    │
 │    └─ Low CPU and low memory but slow queries → likely JVM GC pauses → continue
 │
-└─ Step 5: Check query_handler.p99_ms vs mean_ms, and jvm.gc_time_ms
+└─ Step 5: Compare the two p99s to locate the tail, then check jvm.gc_time_ms
      │
-     ├─ p99_ms >> mean_ms (e.g. mean=50ms, p99=5000ms) with rising gc_time_ms → GC-pause
-     │    signature. Fix: tune Solr's JVM GC (-XX:+UseG1GC -XX:MaxGCPauseMillis=200);
-     │    check Solr's GC logs for Full GC frequency and duration.
+     ├─ query_handler.p99_ms >> p50_ms (e.g. p50=50ms, p99=5000ms) with rising gc_time_ms
+     │    → Solr-side GC-pause signature. Fix: tune Solr's JVM GC
+     │      (-XX:+UseG1GC -XX:MaxGCPauseMillis=200); check Solr's GC logs.
      │
-     └─ mean_ms and p99_ms both high → sustained overload at all percentiles
+     ├─ recent_queries.p99_ms >> query_handler.p99_ms → the tail is in NameRes, not Solr
+     │    (large result sets, Python-side GC). Check `limit`; scale the API horizontally.
+     │
+     └─ Both p50 and p99 high → sustained overload at all percentiles
           → start with memory (Step 3), then CPU (Step 4)
 ```
 
