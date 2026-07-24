@@ -91,3 +91,25 @@ def test_status_recent_queries_populated():
     assert rq['mean_time_ms'] is not None
     assert rq['mean_solr_time_ms'] is not None
     assert rq['p50_ms'] is not None and rq['p99_ms'] is not None
+
+
+def test_slow_query_logs_warning(monkeypatch, caplog):
+    """A lookup slower than SLOW_QUERY_THRESHOLD_MS logs at WARNING (as SLOW QUERY)."""
+    import api.server
+    # Threshold of 0 makes every real query count as slow (any query takes > 0ms).
+    monkeypatch.setattr(api.server, "SLOW_QUERY_THRESHOLD_MS", 0)
+    client = TestClient(app)
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        client.get("/lookup", params={'string': 'alzheimer'})
+    assert any(r.levelno == logging.WARNING and "SLOW QUERY" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_fast_query_does_not_warn(monkeypatch, caplog):
+    """Below the threshold, a lookup logs at INFO, not as a SLOW QUERY warning."""
+    import api.server
+    monkeypatch.setattr(api.server, "SLOW_QUERY_THRESHOLD_MS", 10_000_000)
+    client = TestClient(app)
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        client.get("/lookup", params={'string': 'diabetes'})
+    assert not any("SLOW QUERY" in r.getMessage() for r in caplog.records)
