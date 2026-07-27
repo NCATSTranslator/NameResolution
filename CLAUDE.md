@@ -101,6 +101,22 @@ Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and b
 - `documentation/Scoring.md` - Scoring algorithm details
 - `documentation/NameResolution.ipynb` - Interactive usage examples
 - `documentation/TranslatorGuide.md` - Translator-specific usage guidance
+- `documentation/LLMs.md` - how to install the agent skill and fetch it from a running instance
+- `skills/nameres/SKILL.md` - agent-facing usage instructions, **also served at `GET /llms.txt`**.
+  The Dockerfile's `COPY .` and the absence of `skills/` from `.dockerignore` are what put it in a
+  built image; narrowing either 404s that route in production while every test still passes locally.
+
+### Writing for agents
+
+`skills/nameres/SKILL.md` carries **how to call the API, how to read the result, and the traps that
+silently produce a plausible wrong answer**. It does not carry exhaustive parameter tables, scoring
+internals, or any number that a Babel rebuild or a tuning change could falsify — those live in
+`documentation/` and the skill links to them. If a fact in the skill can go stale without a test
+failing, either delete it or add the test.
+
+Links in `SKILL.md` must be **absolute** `https://github.com/NCATSTranslator/NameResolution/blob/main/...`
+URLs. The file is served raw at `/llms.txt` and pasted into other agents, where a relative link
+resolves against the API host and 404s. `tests/test_llms_txt.py` enforces this.
 
 ### Linking to GitHub
 

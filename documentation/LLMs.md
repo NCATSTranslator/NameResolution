@@ -1,100 +1,80 @@
-# Using NameRes with AI Agents and LLMs
+# Using NameRes from an AI agent
 
-The Name Resolver can be used directly from an AI coding agent (such as Claude Code) or any LLM-based tool that can make HTTP requests. A skill file is provided that gives the agent the instructions it needs to call NameRes correctly.
+NameRes ships a **skill** — a Markdown document that teaches a coding agent how to use this API
+properly: which endpoint to call for which job, how to read and disambiguate ranked results, and the
+handful of behaviours that otherwise produce a confident wrong answer.
 
-## The Skill File
+The skill lives at [`skills/nameres/SKILL.md`](../skills/nameres/SKILL.md) and covers:
 
-The skill file is at [`skills/nameres.md`](../skills/nameres.md) in this repository.
+- resolving a single term to candidate CURIEs, and deciding between them
+- entity-linking or NER over a list of terms in one request
+- listing every synonym for a known CURIE
+- when to use [NodeNorm](https://github.com/NCATSTranslator/NodeNormalization) instead
+- the conflation, provenance and field-naming behaviour that surprises people
 
-It covers:
-- How to call `/lookup` to find CURIEs for a single biomedical name
-- How to interpret and disambiguate scored results — including when to ask the user for help
-- When to use `/bulk-lookup` for resolving multiple names in one request
-- When to use `/synonyms` to retrieve all known names for a CURIE you already have
-- Which ontology prefixes and Biolink types to use for common concept types
+Apart from the YAML frontmatter, which is packaging metadata for Claude Code, the file is plain
+Markdown with no agent-specific syntax — so it works pasted into any agent, not just Claude Code.
 
-The skill file is model-agnostic — it contains no Claude-specific syntax and can be used with any agent that accepts markdown context.
+## Installing it in Claude Code
 
-**Raw file URL (for direct download or linking):**
-```
-https://raw.githubusercontent.com/NCATSTranslator/NameResolution/master/skills/nameres.md
-```
+Claude Code discovers skills as `<skill-name>/SKILL.md` inside a `skills` directory, so **the
+directory matters** — a bare `nameres.md` is not picked up at all.
 
-## Adding the Skill to Claude Code
+For one project, from the repository root:
 
-### Option 1: Project-level (applies when working in a specific project)
-
-Save the skill file to `.claude/skills/nameres.md` inside your project directory:
-
-```bash
-mkdir -p .claude/skills
-curl -o .claude/skills/nameres.md \
-  https://raw.githubusercontent.com/NCATSTranslator/NameResolution/master/skills/nameres.md
+```shell
+mkdir -p .claude/skills/nameres
+curl -o .claude/skills/nameres/SKILL.md \
+  https://raw.githubusercontent.com/NCATSTranslator/NameResolution/main/skills/nameres/SKILL.md
 ```
 
-Claude Code will make it available as `/nameres` when you are working in that project.
+For every session on your machine, use `~/.claude/skills/nameres/` instead.
 
-### Option 2: Global (applies to all your Claude Code sessions)
+Claude Code will then offer it as `/nameres`, and will also load it automatically when a task
+involves resolving names to identifiers.
 
-```bash
-mkdir -p ~/.claude/skills
-curl -o ~/.claude/skills/nameres.md \
-  https://raw.githubusercontent.com/NCATSTranslator/NameResolution/master/skills/nameres.md
+## Fetching it from a running instance
+
+Any NameRes instance serves the same document at `/llms.txt`:
+
+```shell
+curl https://name-resolution-sri.renci.org/llms.txt
 ```
 
-### Using the skill
+This is the better source when you care about accuracy: it is served from the skill file in that
+deployment's own image, so the instructions always match the version of the API answering your
+queries. It is also linked from the OpenAPI description, so an agent given nothing but a base URL can
+find it.
 
-Once installed, invoke the skill with:
+## Using it with other agents
 
-```
-/nameres <your biomedical term or task>
-```
+Paste the file — or the output of `curl .../llms.txt` — into the agent's system prompt, project
+instructions, or context. There is nothing Claude-specific in the body.
 
-For example:
-```
-/nameres find the CURIE for aspirin
-/nameres resolve these disease names to CURIEs: diabetes, hypertension, asthma
-/nameres what are all the synonyms for MONDO:0005148?
-```
+## Example tasks
 
-## Adding the Skill to Other Agents
+Once installed, an agent can be asked things like:
 
-For any agent that accepts a system prompt or context document, copy the content of [`skills/nameres.md`](../skills/nameres.md) and include it in the agent's system prompt or instructions. The skill file is self-contained and does not depend on any external tooling.
+- "Resolve every disease name in `conditions.csv` to a MONDO identifier, and flag the ambiguous ones."
+- "What identifier should I use for Duchenne muscular dystrophy?"
+- "Find all the synonyms for `NCBIGene:1756` so I can search our corpus for mentions of it."
+- "Are 'paracetamol' and 'acetaminophen' the same concept in Translator?"
 
-## Example Workflows
+## Keeping it accurate
 
-### Resolving a single chemical name
+The skill states specific facts about this API — parameter names and defaults, response field names,
+and worked examples with real identifiers. **If you change any of those, update
+`skills/nameres/SKILL.md` in the same PR.** `/llms.txt` is served directly from that file, so there is
+only one copy to maintain.
 
-**Goal:** Find the normalized CURIE for "acetaminophen" to use with a downstream Translator service.
+Two things make that enforceable rather than aspirational:
 
-1. Call `/lookup`:
-   ```
-   GET https://name-resolution-sri.renci.org/lookup?string=acetaminophen&limit=5
-   ```
-2. The top result will likely be `CHEBI:46195` with label "paracetamol" — this is correct due to DrugChemical conflation (acetaminophen and paracetamol are the same compound).
-3. Use `CHEBI:46195` as the normalized identifier for downstream calls.
+- `tests/test_llms_txt.py` checks that the file exists, that its frontmatter is valid and matches its
+  directory, that `/llms.txt` serves it with the frontmatter stripped, that its links are absolute,
+  and that a handful of specific traps are still described.
+- `tests/test_docs_links.py` checks its links resolve and that none of them pin a `master` branch.
 
-### Batch-resolving entities from text
-
-**Goal:** A paragraph mentions "type 2 diabetes", "BRCA1", and "metformin". Resolve all three.
-
-1. Call `/bulk-lookup`:
-   ```json
-   POST https://name-resolution-sri.renci.org/bulk-lookup
-   {
-     "strings": ["type 2 diabetes", "BRCA1", "metformin"],
-     "limit": 5
-   }
-   ```
-2. Inspect each result list. "type 2 diabetes" and "metformin" are likely unambiguous. "BRCA1" may return both the gene and related concepts — check `types` to confirm you have `biolink:Gene`.
-3. If any result is ambiguous, re-query with `biolink_type` or `only_prefixes` as appropriate, or present the top options to the user.
-
-### Looking up synonyms for a known CURIE
-
-**Goal:** You have `MONDO:0005148` and want to know all the names it is known by (e.g., to search a corpus for mentions).
-
-```
-GET https://name-resolution-sri.renci.org/synonyms?preferred_curies=MONDO:0005148
-```
-
-The `names` field in the response contains the full synonym list.
+Examples that quote real identifiers or labels should be re-run against a live instance when they
+change. Values that come from Babel — labels, synonym lists, `clique_identifier_count` — move between
+Babel releases, so the skill deliberately presents response bodies as *shapes* rather than asserting
+values, except where an example is making a specific point that depends on the real result.

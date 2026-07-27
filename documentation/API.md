@@ -221,14 +221,14 @@ POST `/bulk-lookup` with body:
 {
   "diabetes": [
     {
-      "curie": "MONDO:0005148",
+      "curie": "MONDO:0005015",
       "label": "diabetes mellitus",
       "highlighting": {},
       "synonyms": ["diabetes", ...],
-      "score": 42.5,
+      "score": 535.4,
       "taxa": [],
       "types": ["biolink:Disease", ...],
-      "clique_identifier_count": 125
+      "clique_identifier_count": 15
     },
     ...
   ],
@@ -276,13 +276,13 @@ GET /synonyms?preferred_curies=NCBIGene:1756
 
 GET request to look up multiple CURIEs:
 ```
-GET /synonyms?preferred_curies=MONDO:0005148&preferred_curies=NCBIGene:1756
+GET /synonyms?preferred_curies=MONDO:0005015&preferred_curies=NCBIGene:1756
 ```
 
 POST /synonyms with body:
 ```json
 {
-  "preferred_curies": ["MONDO:0005148", "NCBIGene:1756"]
+  "preferred_curies": ["MONDO:0005015", "NCBIGene:1756"]
 }
 ```
 
@@ -290,13 +290,12 @@ POST /synonyms with body:
 
 ```json
 {
-  "MONDO:0005148": {
-    "curie": "MONDO:0005148",
+  "MONDO:0005015": {
+    "curie": "MONDO:0005015",
     "preferred_name": "diabetes mellitus",
     "names": ["diabetes mellitus", "diabetes", "DM", ...],
     "types": ["Disease", "DiseaseOrPhenotypicFeature", ...],
-    "taxa": [],
-    "clique_identifier_count": 125,
+    "clique_identifier_count": 15,
     ...
   },
   "NCBIGene:1756": {
@@ -357,3 +356,20 @@ Solr database.
   "size": "142.17 GB"
 }
 ```
+
+### `/llms.txt`
+
+Returns the agent instructions for this service as plain-text Markdown: which endpoint to call for
+which job, how to read and disambiguate ranked results, and the behaviours that otherwise produce a
+confident wrong answer.
+
+```
+GET /llms.txt
+```
+
+The document is served directly from [`skills/nameres/SKILL.md`](../skills/nameres/SKILL.md) in this
+repository, with its YAML frontmatter stripped, so the instructions always match the version of the
+API serving them. See [Using NameRes from an AI agent](./LLMs.md) for how to install it in a coding
+agent instead of fetching it.
+
+Returns `404` if the instance was built without the `skills/` directory.
