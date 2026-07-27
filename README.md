@@ -15,7 +15,7 @@ visible through this API, at [Where NameRes data comes from](documentation/Babel
 
 The best place to start is the Jupyter Notebook, which walks through the most common use cases with live examples:
 
-* [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/NCATSTranslator/NameResolution/blob/master/documentation/NameResolution.ipynb) [Jupyter Notebook](documentation/NameResolution.ipynb) — interactive examples covering lookup, filtering, autocomplete, bulk lookup, and synonyms
+* [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/NCATSTranslator/NameResolution/blob/main/documentation/NameResolution.ipynb) [Jupyter Notebook](documentation/NameResolution.ipynb) — interactive examples covering lookup, filtering, autocomplete, bulk lookup, and synonyms
 
 ## Documentation
 

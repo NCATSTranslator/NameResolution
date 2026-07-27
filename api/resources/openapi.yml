@@ -17,7 +17,7 @@ info:
     conflation; the active conflations for any deployment can be discovered via the <code>/status</code> endpoint.
     You can read more about this, and about the other <a href="https://github.com/NCATSTranslator/Babel">Babel</a>
     behaviour visible through this API, at
-    <a href="https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/Babel.md">Where NameRes data comes from</a>.</p>'
+    <a href="https://github.com/NCATSTranslator/NameResolution/blob/main/documentation/Babel.md">Where NameRes data comes from</a>.</p>'
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT

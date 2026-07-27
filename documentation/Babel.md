@@ -45,7 +45,7 @@ The practical consequence is that **there is no separate document to find for th
 member.** A protein is searchable, but the result you get back is identified by the gene that
 encodes it and carries the union of both sets of synonyms; likewise a drug is identified by its
 active ingredient. What each conflation merges, and in what order, is described in
-[Babel's Conflation documentation](https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md).
+[Babel's Conflation documentation](https://github.com/NCATSTranslator/Babel/blob/main/docs/Conflation.md).
 
 Once you have an identifier from NameRes you can use
 [NodeNorm](https://nodenormalization-sri.renci.org/) to see the clique with and without each
@@ -61,12 +61,12 @@ type, falling back to `biolink:NamedThing` where UMLS asserts none.
 
 This is deliberate coverage, not a defect: it means a UMLS concept still resolves to *something*
 even when Babel could not merge it into a richer clique. See
-[Babel's leftover-UMLS documentation](https://github.com/NCATSTranslator/Babel/blob/master/docs/sources/UMLS/Leftover.md).
+[Babel's leftover-UMLS documentation](https://github.com/NCATSTranslator/Babel/blob/main/docs/sources/UMLS/Leftover.md).
 
 ## Gotchas in the returned fields
 
 Every field NameRes returns from `/lookup` and `/synonyms` comes from Babel's
-[synonym file format](https://github.com/NCATSTranslator/Babel/blob/master/docs/DataFormats.md).
+[synonym file format](https://github.com/NCATSTranslator/Babel/blob/main/docs/DataFormats.md).
 Four of them behave in ways that surprise people.
 
 ### `label` is not necessarily the label of the CURIE you looked up
@@ -76,7 +76,7 @@ that is not the label of the clique leader — to disambiguate the concept, or t
 Translator UI something better to display. Looking up a CURIE and getting back a different-looking
 name is expected. How the preferred name is chosen (including the chemical-specific boost prefixes
 and the length demotion) is in
-[Understanding Babel outputs](https://github.com/NCATSTranslator/Babel/blob/master/docs/Understanding.md).
+[Understanding Babel outputs](https://github.com/NCATSTranslator/Babel/blob/main/docs/Understanding.md).
 
 ### `synonyms` is not ordered by quality
 
@@ -120,14 +120,14 @@ A NameRes instance serves a fixed build, not live Babel output. `/status` report
 ```json
 {
   "babel_version": "2025sep1",
-  "babel_version_url": "https://github.com/ncatstranslator/Babel/blob/master/releases/2025sep1.md",
+  "babel_version_url": "https://github.com/ncatstranslator/Babel/blob/main/releases/2025sep1.md",
   "biolink_model": { "tag": "v4.2.6-rc5" }
 }
 ```
 
 A concept that Babel has since fixed will still be wrong here until the instance is rebuilt and
 redeployed. Check `/status` before reporting a stale clique, and see
-[Babel's releases](https://github.com/NCATSTranslator/Babel/blob/master/releases/README.md) for
+[Babel's releases](https://github.com/NCATSTranslator/Babel/blob/main/releases/README.md) for
 what changed between builds.
 
 ## Reporting a problem
@@ -142,11 +142,11 @@ Babel and NameRes have separate issue trackers, and the split is by *what is wro
   [NameRes issue tracker](https://github.com/NCATSTranslator/NameResolution/issues).
 
 If you are not sure, file it in Babel and it will be sorted out.
-[Babel's guide to filing an issue](https://github.com/NCATSTranslator/Babel/blob/master/docs/NewIssue.md)
+[Babel's guide to filing an issue](https://github.com/NCATSTranslator/Babel/blob/main/docs/NewIssue.md)
 describes what to include and how the priority/impact/size fields are used.
 
 ## Going deeper
 
 Everything above is what a NameRes user needs. If you want to know how the cliques are actually
 built — the per-source ingestion, the concord files, the union-find merge, running the pipeline
-yourself — start at [Babel's documentation index](https://github.com/NCATSTranslator/Babel/blob/master/docs/).
+yourself — start at [Babel's documentation index](https://github.com/NCATSTranslator/Babel/blob/main/docs/).
