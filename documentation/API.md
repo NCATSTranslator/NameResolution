@@ -258,8 +258,11 @@ Look up all synonyms and information for a CURIE.
 - `preferred_name`: The preferred name for this concept.
 - `names`: A list of all known synonyms for this concept.
 - `types`: A list of Biolink types for this concept.
-- `taxa`: A list of taxa associated with this concept.
+- `taxa`: A list of taxa associated with this concept. Unlike `/lookup`, this key is omitted
+  entirely rather than returned as an empty list when the concept has no taxa.
+- `taxon_specific`: Whether this concept is associated with one or more specific taxa.
 - `clique_identifier_count`: The number of identifiers in this clique.
+- `shortest_name_length`: The length of the shortest synonym in `names`.
 - Additional metadata fields such as `curie_suffix`, `id`, and `_version_`.
 
 **Example requests:**

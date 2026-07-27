@@ -101,6 +101,11 @@ means no source asserted a taxon for any member, not that the concept is taxon-a
 why `only_taxa` filtering keeps results that have *no* taxon alongside results with a matching
 one — excluding them would drop concepts that are simply unannotated.
 
+Note that "no taxon" looks different between the two endpoints: `/lookup` always returns a `taxa`
+key and gives it an empty list, while `/synonyms` returns the raw Solr document, which simply omits
+the field. Babel's own `taxon_specific` flag is carried through to `/synonyms` if you want the
+distinction as a boolean.
+
 ### There are no descriptions
 
 Babel collects descriptions (from [UberGraph](https://github.com/INCATools/ubergraph/)) and
