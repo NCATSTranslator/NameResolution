@@ -101,6 +101,22 @@ Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and b
 - `documentation/Scoring.md` - Scoring algorithm details
 - `documentation/NameResolution.ipynb` - Interactive usage examples
 - `documentation/TranslatorGuide.md` - Translator-specific usage guidance
+- `documentation/LLMs.md` - how to install the agent skill and fetch it from a running instance
+- `skills/nameres/SKILL.md` - agent-facing usage instructions, **also served at `GET /llms.txt`**.
+  The Dockerfile's `COPY .` and the absence of `skills/` from `.dockerignore` are what put it in a
+  built image; narrowing either 404s that route in production while every test still passes locally.
+
+### Writing for agents
+
+`skills/nameres/SKILL.md` carries **how to call the API, how to read the result, and the traps that
+silently produce a plausible wrong answer**. It does not carry exhaustive parameter tables, scoring
+internals, or any number that a Babel rebuild or a tuning change could falsify — those live in
+`documentation/` and the skill links to them. If a fact in the skill can go stale without a test
+failing, either delete it or add the test.
+
+Links in `SKILL.md` must be **absolute** `https://github.com/NCATSTranslator/NameResolution/blob/main/...`
+URLs. The file is served raw at `/llms.txt` and pasted into other agents, where a relative link
+resolves against the API host and 404s. `tests/test_llms_txt.py` enforces this.
 
 ### Linking to GitHub
 
@@ -112,3 +128,23 @@ that redirect goes away. Always write `/blob/main/`.
 Do not check this against a local clone's `origin/HEAD`: that ref is cached at clone time and does
 not follow a remote rename, so it will still say `master` long after the rename. Use
 `gh repo view <owner>/<repo> --json defaultBranchRef`.
+
+Babel, NodeNormalization and NameResolution moved from the `TranslatorSRI` org to
+`NCATSTranslator`, but **not every `TranslatorSRI` reference is stale**:
+`TranslatorSRI/RENCI-Python-image` (used by `data-loading/Dockerfile`),
+`TranslatorSRI/babel-validation` and `TranslatorSRI/r3` really do still live there, and have no
+`NCATSTranslator` equivalent. `tests/test_docs_links.py` bans the three moved repositories by
+name for exactly this reason — do not widen it to the bare org string.
+
+`gh pr view --json commits,changedFiles` serves a cached summary that can be badly stale — it has
+reported 49 commits / 38 files for a PR that was really 12 and 20. To check what a PR actually
+contains, use the compare API:
+`gh api repos/<owner>/<repo>/compare/<base>...<head> --jq '.ahead_by, .behind_by, (.files|length)'`.
+
+### Deployed instances are not this code
+
+Do not verify behaviour against a deployed NameRes and assume it matches the repo. In July 2026 the
+ITRB CI, test and prod instances, RENCI dev and this branch all disagreed about `/status` alone —
+prod predated `babel_version` entirely, CI nested the Solr fields under `solr`. Check
+`/status`'s `nameres_version` before trusting a live response as ground truth for repo behaviour,
+and say in the PR which instance an example came from.
