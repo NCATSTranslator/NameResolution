@@ -129,6 +129,13 @@ Do not check this against a local clone's `origin/HEAD`: that ref is cached at c
 not follow a remote rename, so it will still say `master` long after the rename. Use
 `gh repo view <owner>/<repo> --json defaultBranchRef`.
 
+Babel, NodeNormalization and NameResolution moved from the `TranslatorSRI` org to
+`NCATSTranslator`, but **not every `TranslatorSRI` reference is stale**:
+`TranslatorSRI/RENCI-Python-image` (used by `data-loading/Dockerfile`),
+`TranslatorSRI/babel-validation` and `TranslatorSRI/r3` really do still live there, and have no
+`NCATSTranslator` equivalent. `tests/test_docs_links.py` bans the three moved repositories by
+name for exactly this reason — do not widen it to the bare org string.
+
 `gh pr view --json commits,changedFiles` serves a cached summary that can be badly stale — it has
 reported 49 commits / 38 files for a PR that was really 12 and 20. To check what a PR actually
 contains, use the compare API:

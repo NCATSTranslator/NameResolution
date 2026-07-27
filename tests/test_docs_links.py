@@ -10,14 +10,31 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
 
-# Markdown we own. The notebook and anything vendored is deliberately excluded.
-MARKDOWN_FILES = sorted(
-    p for p in REPO_ROOT.rglob("*.md")
-    if not any(part in {"venv", ".venv", "node_modules", ".git", ".pytest_cache"} for part in p.parts)
-)
+#: `data/` is gitignored -- it holds a working copy of the translator-devops name-lookup chart
+#: and downloaded Solr data, neither of which is ours to police.
+EXCLUDED = {"venv", ".venv", "node_modules", ".git", ".pytest_cache", "data"}
 
-# Files that carry links out to GitHub in code rather than in prose.
-SOURCE_WITH_LINKS = [REPO_ROOT / "api" / "server.py", REPO_ROOT / "api" / "resources" / "openapi.yml"]
+
+def _ours(path):
+    return not any(part in EXCLUDED for part in path.parts)
+
+
+# Markdown we own. Anything vendored is deliberately excluded.
+MARKDOWN_FILES = sorted(p for p in REPO_ROOT.rglob("*.md") if _ours(p))
+
+# Everything else that can carry a GitHub link: endpoint descriptions, OpenAPI metadata, the
+# notebook (its Colab badge names a branch), CITATION.cff (its repository-code is what Zenodo
+# reads), the Solr configset, Dockerfiles and shell scripts. Globbed by extension rather than
+# listed, because an explicit list is exactly what let a stale Colab badge and a wrong
+# CITATION.cff sit unnoticed in sibling repos. These are scanned only for banned URL forms --
+# relative links and heading anchors are a Markdown concern.
+LINK_BEARING_SUFFIXES = {".py", ".yml", ".yaml", ".ipynb", ".cff", ".xml", ".sh", ".toml"}
+
+SOURCE_WITH_LINKS = sorted(
+    p for p in REPO_ROOT.rglob("*")
+    if p.is_file() and _ours(p)
+    and (p.suffix in LINK_BEARING_SUFFIXES or p.name.startswith("Dockerfile"))
+)
 
 INLINE_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 HEADING = re.compile(r"^#+\s+(.*)$", re.MULTILINE)
@@ -96,6 +113,8 @@ def test_no_master_branch_links():
     away. See CLAUDE.md."""
     offenders = []
     for path in MARKDOWN_FILES + SOURCE_WITH_LINKS:
+        if not path.exists():
+            continue
         for line_no, line in enumerate(path.read_text().splitlines(), start=1):
             if MASTER_LINK.search(line):
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{line_no}")
@@ -115,6 +134,8 @@ def test_no_stale_org_links():
     still name an org that no longer owns the code."""
     offenders = []
     for path in MARKDOWN_FILES + SOURCE_WITH_LINKS:
+        if not path.exists():
+            continue
         for line_no, line in enumerate(path.read_text().splitlines(), start=1):
             if MOVED_TO_NCATSTRANSLATOR.search(line):
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{line_no}")
