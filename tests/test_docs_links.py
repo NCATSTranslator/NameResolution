@@ -79,16 +79,27 @@ def test_in_repo_anchors_in_source_resolve():
     assert not broken, "Anchors with no matching heading in API.md:\n  " + "\n  ".join(broken)
 
 
+#: A GitHub link pinned to `master`, in either the blob or the raw form. The raw half is scoped to
+#: NCATSTranslator on purpose: api/server.py legitimately builds
+#: raw.githubusercontent.com/biolink/biolink-model/master/... and biolink-model really does default
+#: to master.
+MASTER_LINK = re.compile(
+    r"github\.com/[^/\s]+/[^/\s]+/blob/master/"
+    r"|raw\.githubusercontent\.com/NCATSTranslator/[^/\s]+/master/",
+    re.IGNORECASE,
+)
+
+
 def test_no_master_branch_links():
-    """NameResolution, Babel and NodeNormalization all default to `main`. A /blob/master/
-    URL resolves only through GitHub's post-rename redirect, so it looks fine right up
-    until that redirect goes away. See CLAUDE.md."""
+    """NameResolution, Babel and NodeNormalization all default to `main`. A master URL resolves
+    only through GitHub's post-rename redirect, so it looks fine right up until that redirect goes
+    away. See CLAUDE.md."""
     offenders = []
     for path in MARKDOWN_FILES + SOURCE_WITH_LINKS:
         for line_no, line in enumerate(path.read_text().splitlines(), start=1):
-            if re.search(r"github\.com/[^/\s]+/[^/\s]+/blob/master/", line, re.IGNORECASE):
+            if MASTER_LINK.search(line):
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{line_no}")
-    assert not offenders, "Links using /blob/master/ instead of /blob/main/:\n  " + "\n  ".join(offenders)
+    assert not offenders, "Links pinned to `master` instead of `main`:\n  " + "\n  ".join(offenders)
 
 
 #: The three repositories that moved from the TranslatorSRI org to NCATSTranslator. Scoped to

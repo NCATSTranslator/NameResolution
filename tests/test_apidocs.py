@@ -14,4 +14,6 @@ def test_construct_open_api_schema_returns_cached_schema():
     second = construct_open_api_schema(app)
 
     assert second is first
-    assert sorted(second["paths"]) == ["/bulk-lookup", "/lookup", "/reverse_lookup", "/status", "/synonyms"]
+    assert sorted(second["paths"]) == [
+        "/bulk-lookup", "/llms.txt", "/lookup", "/reverse_lookup", "/status", "/synonyms"
+    ]

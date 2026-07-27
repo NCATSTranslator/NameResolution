@@ -10,10 +10,11 @@ import time
 import os
 import re
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Union, Annotated, Optional
 
-from fastapi import Body, FastAPI, Query
-from fastapi.responses import RedirectResponse
+from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi.responses import PlainTextResponse, RedirectResponse
 import httpx
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
@@ -25,6 +26,16 @@ SOLR_PORT = os.getenv("SOLR_PORT", "8983")
 # The Solr core to query. In standalone mode this is the core name; the cloud-mode
 # backups we used to ship called it name_lookup_shard1_replica_n1 instead (see status()).
 SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
+
+# The agent instructions served at /llms.txt. api/ sits one level below the repo root.
+# The Dockerfile's `COPY .` is what puts this in the image; narrowing that copy, or adding
+# skills/ to .dockerignore, makes this route 404 in every deployment while still passing
+# locally and in CI. tests/test_llms_txt.py asserts the path resolves.
+SKILL_PATH = Path(__file__).parents[1] / "skills" / "nameres" / "SKILL.md"
+
+# The YAML frontmatter block at the top of SKILL.md. \r?\n rather than \n so that a CRLF
+# checkout doesn't silently serve the frontmatter as part of the document.
+FRONTMATTER = re.compile(r"\A---\r?\n.*?\r?\n---\r?\n", re.DOTALL)
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
@@ -46,6 +57,36 @@ async def docs_redirect():
     Redirect requests to `/` (where we don't have any content) to `/docs` (which is our Swagger interface).
     """
     return RedirectResponse(url='/docs')
+
+
+# ENDPOINT /llms.txt
+@app.get(
+    "/llms.txt",
+    summary="Instructions for using this API from an AI agent or LLM.",
+    description="<p>Returns a Markdown document explaining how to resolve biomedical names to CURIEs "
+                "with this service: which endpoint to call, how to read and disambiguate the ranked "
+                "results, and the behaviours that will otherwise silently produce a wrong answer.</p>"
+                "<p>The same document is maintained as a "
+                "<a href=\"https://github.com/NCATSTranslator/NameResolution/tree/main/skills/nameres\">skill</a> "
+                "in the NameResolution repository, so these instructions always match the version of "
+                "the API serving them.</p>",
+    response_class=PlainTextResponse,
+    response_description="Markdown instructions for using this API.",
+)
+async def llms_txt() -> PlainTextResponse:
+    """ Serve the agent instructions from skills/nameres/SKILL.md. """
+    try:
+        skill = SKILL_PATH.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("Could not read agent instructions from %s.", SKILL_PATH)
+        raise HTTPException(
+            status_code=404,
+            detail="Agent instructions are not available on this instance. They can be read at "
+                   "https://github.com/NCATSTranslator/NameResolution/tree/main/skills/nameres",
+        )
+
+    # The frontmatter is Claude Code packaging metadata, which is noise in an llms.txt.
+    return PlainTextResponse(FRONTMATTER.sub("", skill, count=1).lstrip("\n"))
 
 
 @app.get("/status",
@@ -267,16 +308,50 @@ async def name_lookup(curies) -> Dict[str, Dict]:
     return output
 
 class LookupResult(BaseModel):
-    curie:str
-    label: str
-    highlighting: Dict[str, List[str]]
-    synonyms: List[str]
-    taxa: List[str]
-    types: List[str]
-    score: float
-    clique_identifier_count: int
-    explain: Optional[dict]   # Explanation for this specific result
-    debug: Optional[dict]     # The debug information for the entire query
+    curie: str = Field(
+        description="The preferred CURIE for this concept. Note that this is the identifier of the "
+                    "conflated clique, so searching for a protein returns the CURIE of the gene that "
+                    "encodes it, and searching for a drug returns its active ingredient."
+    )
+    label: str = Field(
+        description="The preferred name of this concept, as chosen by Babel. This is a property of the "
+                    "whole clique: it is not necessarily the label that `curie` carries in its own "
+                    "source database."
+    )
+    highlighting: Dict[str, List[str]] = Field(
+        description="Which labels and synonyms matched the query, as `labels` and `synonyms` lists. "
+                    "Empty unless the request set `highlighting=true`."
+    )
+    synonyms: List[str] = Field(
+        description="All known synonyms for this concept. Not ordered by quality or length -- use "
+                    "`label` if you want a single name for the concept."
+    )
+    taxa: List[str] = Field(
+        description="The taxa this concept is associated with, as NCBITaxon CURIEs. An empty list means "
+                    "no source asserted a taxon, not that the concept is taxon-agnostic."
+    )
+    types: List[str] = Field(
+        description="The Biolink types for this concept, narrowest first, each with the `biolink:` "
+                    "prefix. Note that /synonyms returns these same types *without* the prefix."
+    )
+    score: float = Field(
+        description="The Solr relevance score. Unbounded and on no fixed scale, so it is only "
+                    "meaningful when comparing results within a single query -- do not threshold on an "
+                    "absolute value."
+    )
+    clique_identifier_count: int = Field(
+        description="How many identifiers Babel merged into this concept, i.e. how many source "
+                    "vocabularies cover it. Used to boost the score, on the theory that a widely "
+                    "cross-referenced concept is more likely to be the one meant."
+    )
+    explain: Optional[dict] = Field(
+        description="Solr's explanation of how this result's score was calculated. Null unless the "
+                    "request set `debug` to `results` or `all`."
+    )
+    debug: Optional[dict] = Field(
+        description="Debugging information for the query as a whole, such as the parsed query and "
+                    "timings. Null unless the request set `debug` to something other than `none`."
+    )
 
 
 @app.get("/lookup",
