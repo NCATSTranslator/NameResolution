@@ -100,3 +100,15 @@ Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and b
 - `documentation/Deployment.md` - Docker/Kubernetes deployment guide
 - `documentation/Scoring.md` - Scoring algorithm details
 - `documentation/NameResolution.ipynb` - Interactive usage examples
+- `documentation/TranslatorGuide.md` - Translator-specific usage guidance
+
+### Linking to GitHub
+
+NameResolution, Babel and NodeNormalization all use `main` as their default branch. Babel's was
+renamed from `master` fairly recently and NameResolution has no `master` branch at all, so
+`/blob/master/` URLs resolve only through GitHub's post-rename redirect — they look fine until
+that redirect goes away. Always write `/blob/main/`.
+
+Do not check this against a local clone's `origin/HEAD`: that ref is cached at clone time and does
+not follow a remote rename, so it will still say `master` long after the rename. Use
+`gh repo view <owner>/<repo> --json defaultBranchRef`.
