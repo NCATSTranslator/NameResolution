@@ -81,3 +81,4 @@ def test_skill_links_are_absolute():
         if not target.startswith(("https://", "http://", "#"))
     ]
     assert not relative, f"Links in SKILL.md must be absolute URLs: {relative}"
+

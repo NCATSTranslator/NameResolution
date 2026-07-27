@@ -33,8 +33,9 @@ SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
 # locally and in CI. tests/test_llms_txt.py asserts the path resolves.
 SKILL_PATH = Path(__file__).parents[1] / "skills" / "nameres" / "SKILL.md"
 
-# The YAML frontmatter block at the top of SKILL.md. \r?\n rather than \n so that a CRLF
-# checkout doesn't silently serve the frontmatter as part of the document.
+# The YAML frontmatter block at the top of SKILL.md. read_text() opens in text mode, so a CRLF
+# checkout is already normalised to \n before this runs; the \r? is belt-and-braces in case the
+# read ever becomes a byte read, not load-bearing today.
 FRONTMATTER = re.compile(r"\A---\r?\n.*?\r?\n---\r?\n", re.DOTALL)
 
 app = FastAPI(**get_app_info())

@@ -128,3 +128,16 @@ that redirect goes away. Always write `/blob/main/`.
 Do not check this against a local clone's `origin/HEAD`: that ref is cached at clone time and does
 not follow a remote rename, so it will still say `master` long after the rename. Use
 `gh repo view <owner>/<repo> --json defaultBranchRef`.
+
+`gh pr view --json commits,changedFiles` serves a cached summary that can be badly stale — it has
+reported 49 commits / 38 files for a PR that was really 12 and 20. To check what a PR actually
+contains, use the compare API:
+`gh api repos/<owner>/<repo>/compare/<base>...<head> --jq '.ahead_by, .behind_by, (.files|length)'`.
+
+### Deployed instances are not this code
+
+Do not verify behaviour against a deployed NameRes and assume it matches the repo. In July 2026 the
+ITRB CI, test and prod instances, RENCI dev and this branch all disagreed about `/status` alone —
+prod predated `babel_version` entirely, CI nested the Solr fields under `solr`. Check
+`/status`'s `nameres_version` before trusting a live response as ground truth for repo behaviour,
+and say in the PR which instance an example came from.
