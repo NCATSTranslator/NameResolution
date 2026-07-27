@@ -75,6 +75,28 @@ jobs:
           fi
           echo "Loader refused the non-empty core as expected."
 
+      # /llms.txt reads skills/nameres/SKILL.md off disk, so it depends on that file being in
+      # the built image. Nothing else does: it gets there via the Dockerfile's blanket
+      # `COPY .` and the absence of skills/ from .dockerignore. Narrowing either -- a future
+      # "slim the image" change is the obvious way -- 404s the route in every deployment while
+      # the whole suite above still passes, because the tests run against the working tree.
+      # This is the only step that would catch that, so it builds the real image and asks it.
+      #
+      # TestClient rather than starting the container and curling: no port to bind, no readiness
+      # loop, and /llms.txt needs no Solr.
+      - name: The skill must be present and served in the built image
+        run: |
+          docker build -t nameres-image-check .
+          docker run --rm --entrypoint python nameres-image-check -c '
+          from fastapi.testclient import TestClient
+          from api.server import SKILL_PATH, app
+          assert SKILL_PATH.is_file(), f"skills/ is missing from the image: {SKILL_PATH}"
+          response = TestClient(app).get("/llms.txt")
+          assert response.status_code == 200, response.status_code
+          assert response.text.startswith("# "), response.text[:80]
+          print(f"OK: {SKILL_PATH} served as {len(response.text)} chars")
+          '
+
       # The backup is the actual product of data-loading/, so check that a core can be
       # tarred up, dropped into a fresh Solr, and served without any restore-time setup.
       #
