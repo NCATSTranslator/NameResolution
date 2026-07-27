@@ -14,9 +14,9 @@ If multiple terms are matched in the same document, the sum of the score for eac
 
 The TF*IDF score will be multiplied by [several boosts](https://github.com/NCATSTranslator/NameResolution/blob/56e2151bb9e6fd120644cebdf4ff45b3bc47da05/api/server.py#L436-L461)
 that depend on four factors:
-* We index two fields: the "preferred name" of every clique and the "synonyms" of every clique. The [preferred name
-  is chosen by Babel](https://github.com/NCATSTranslator/Babel/blob/master/docs/Understanding.md),
-  while the synonyms are collected from all the different Babel sources.
+* We index two fields: the "preferred name" of every clique and the "synonyms" of every clique. The preferred name
+  is chosen by Babel, while the synonyms are collected from all the different Babel sources; see
+  [Where NameRes data comes from](./Babel.md) for what that means for the values you get back.
 * We set up two indexes: a [StandardTokenizer](https://solr.apache.org/guide/solr/latest/indexing-guide/tokenizers.html#standard-tokenizer)
   that splits the field into tokens at whitespace and punctuation characters, and a
   [KeywordTokenizer](https://solr.apache.org/guide/solr/latest/indexing-guide/tokenizers.html#keyword-tokenizer) that
@@ -27,6 +27,8 @@ that depend on four factors:
   (NOTE: this might be removed soon.)
 * We use the number of identifiers in the clique as a measure of how widely used a clique is. Since some cliques
   share the same preferred name or label, we can use this to promote the clique most likely to be useful.
+  (What this count literally measures, and where the proxy breaks down, is described in
+  [Where NameRes data comes from](./Babel.md#clique_identifier_count-measures-coverage-not-importance).)
 
 We combine these factors in this way in a standard query matches:
 
