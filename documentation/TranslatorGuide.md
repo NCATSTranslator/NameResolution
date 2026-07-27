@@ -82,7 +82,10 @@ Without `autocomplete`, `"diab"` will only match documents that literally contai
 ### 6. If the correct concept is consistently missing
 
 If your filtering is correct but the expected result never appears, the concept may be missing from the
-Babel data that NameRes is built from. Consider filing an issue on:
+Babel data that NameRes is built from — or it may be there under a conflated identifier you weren't
+expecting. [Where NameRes data comes from](./Babel.md) covers which Babel files an instance is built
+from and why, for example, there is no separate document for a protein. If the concept really is
+absent, file an issue on:
 - [NameRes GitHub](https://github.com/NCATSTranslator/NameResolution/issues) — for search/ranking problems
 - [Babel GitHub](https://github.com/NCATSTranslator/Babel/issues) — for missing synonyms or identifiers
 
@@ -182,4 +185,6 @@ application calls NameRes repeatedly for the same input strings, cache the resul
 GET /status
 ```
 
-The `babel_version` field in the response changes with each data release.
+The `babel_version` field in the response changes with each data release. An instance serves one
+fixed Babel build rather than live output — see
+[Where NameRes data comes from](./Babel.md#the-index-is-a-snapshot-of-one-babel-release).

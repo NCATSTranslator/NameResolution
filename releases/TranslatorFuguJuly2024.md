@@ -1,6 +1,6 @@
 # NameRes Translator "Fugu" July 2024 Release
 - Babel: [2024jul13](https://stars.renci.org/var/babel_outputs/2024jul13/)
-  ([Babel Translator July 2024 Release](https://github.com/TranslatorSRI/Babel/blob/master/releases/TranslatorFuguJuly2024.md))
+  ([Babel Translator July 2024 Release](https://github.com/NCATSTranslator/Babel/blob/main/releases/TranslatorFuguJuly2024.md))
 - NameRes: [v1.3.14](https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.14)
 
 Next release: [Translator "Guppy" August 2024](./TranslatorGuppyAugust2024.md)

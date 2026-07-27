@@ -1,6 +1,6 @@
 # NameRes Translator "Guppy" August 2024 Release
 - Babel: [2024aug18](https://stars.renci.org/var/babel_outputs/2024aug18/)
-  ([Babel Translator "Guppy" August 2024 Release](https://github.com/TranslatorSRI/Babel/blob/master/releases/TranslatorGuppyAugust2024.md))
+  ([Babel Translator "Guppy" August 2024 Release](https://github.com/NCATSTranslator/Babel/blob/main/releases/TranslatorGuppyAugust2024.md))
 - NameRes: [v1.4.3](https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.4.3)
 Next release: [Translator "Hammerhead" November 2024](./TranslatorHammerheadNovember2024.md)
 Previous release: [Translator "Fugu" July 2024](./TranslatorFuguJuly2024.md)
@@ -10,7 +10,7 @@ Previous release: [Translator "Fugu" July 2024](./TranslatorFuguJuly2024.md)
 * Added a Solr highlighter to report on matching labels and synonyms ([#156](https://github.com/TranslatorSRI/NameResolution/pull/156))
 * Added support for multitype filtering ([#158](https://github.com/TranslatorSRI/NameResolution/pull/158))
 
-## Babel updates (from [Babel Translator "Guppy" August 2024 Release](https://github.com/TranslatorSRI/Babel/blob/master/releases/TranslatorGuppyAugust2024.md))
+## Babel updates (from [Babel Translator "Guppy" August 2024 Release](https://github.com/NCATSTranslator/Babel/blob/main/releases/TranslatorGuppyAugust2024.md))
 * [Feature] Added support for generating DuckDB and Parquet files from the compendium and synonym files,
   allowing us to run queries such as looking for all the identically labeled cliques across
   all the compendia. Increased Babel Outputs file size to support DuckDB.

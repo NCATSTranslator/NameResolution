@@ -146,54 +146,17 @@ release tarball; the servers (`docker-compose.yml`, CI, the Helm chart) track th
 `9.10` line, so they float forward onto patch releases and stay at or above the
 builder without anyone having to remember to bump them.
 
-## Options considered
+## Why it is built this way
 
-We looked at three approaches before settling on the current one.
+Three decisions here are easy to undo by accident, so they are worth stating:
 
-### A. Status quo (cloud mode, replication backup, schema re-applied on restore)
-Solr ran in cloud mode (`-DzkRun`) everywhere. The backup contained only the
-Lucene index, so the restore code had to recreate the collection and re-declare
-every field/type/copy-field over the Schema API. **Rejected:** ZooKeeper is
-overhead for one node; the schema was defined twice (loader *and* restore) and
-had already drifted; the backup was not self-contained; and the load committed
-after every file with a fixed `sleep` between files.
-
-### B. PR [#249](https://github.com/NCATSTranslator/NameResolution/pull/249) (standalone + config in the backup)
-Switched to standalone mode and started shipping `solrconfig.xml` /
-`managed-schema.xml` in the backup. A real improvement, but it still created the
-core through the API and did not tackle load speed. **Superseded** by C.
-
-### C. Chosen: standalone + checked-in configset + self-contained core backup + parallel load
-The backup is the whole core (config + schema + index), so restore is just
-"untar and start". The schema has a single source of truth (the checked-in
-configset). The load is parallel with a single deferred commit, guarded by a
-document count. This is the most maintainable *and* the fastest option.
-
-Sub-choices within C:
-
-- **Parallel load vs. cheap wins only.** We parallelize (the real speed lever)
-  and protect against dropped/corrupt data with the pre/post document-count
-  check and `curl --fail`, rather than only removing the per-file commit.
-- **`tar` the stopped core vs. the replication backup API.** We `tar` the core
-  directory after a clean commit -- simpler, and the result is self-contained.
-- **Optimize before export.** We run `optimize=true` before tarring: one segment
-  makes the index smaller and faster to serve (fewer files to keep in the OS
-  page cache), at the cost of a one-time forced merge during the build.
-
-## Issues addressed
-
-- Closes [#238](https://github.com/NCATSTranslator/NameResolution/issues/238) and
-  [#185](https://github.com/NCATSTranslator/NameResolution/issues/185): the backup
-  now includes the config and schema, so restore no longer recreates fields.
-- Closes [#256](https://github.com/NCATSTranslator/NameResolution/issues/256):
-  the index is optimized before the snapshot is exported.
-- Closes [#266](https://github.com/NCATSTranslator/NameResolution/issues/266):
-  `queryResultCache` is sized in the checked-in `solrconfig.xml`.
-- Addresses [translator-devops#609](https://github.com/helxplatform/translator-devops/issues/609):
-  the download init container is idempotent, so a pod restart no longer wipes a
-  good core and leaves Solr empty.
-- Makes progress on [#265](https://github.com/NCATSTranslator/NameResolution/issues/265):
-  the Helm chart's Solr heap is lowered to leave room for the OS page cache, and
-  optimizing shrinks the index. Final heap/memory sizing and the GC-flag rework
-  ([#272](https://github.com/NCATSTranslator/NameResolution/issues/272)) still
-  need to be validated under query load and are tracked separately.
+- **Standalone, not cloud mode.** Solr used to run with `-DzkRun` everywhere.
+  ZooKeeper buys nothing for a single node, and cloud mode is what forced the
+  restore to recreate the collection and re-declare the schema over the Schema
+  API -- which is how the schema came to be defined in two places and drift.
+- **`tar` the stopped core, not the replication backup API.** Tarring the core
+  directory after a clean commit is simpler, and the result is self-contained:
+  config, schema and index in one artifact, so restore is "untar and start".
+- **Optimize before export.** `optimize=true` before tarring merges the index to
+  one segment, which makes it smaller and faster to serve (fewer files to hold
+  in the OS page cache), at the cost of a one-time forced merge during the build.

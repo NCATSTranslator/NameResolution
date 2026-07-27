@@ -1,6 +1,6 @@
 # NameRes Translator "Hammerhead" November 2024 Release
 - Babel: [2024oct24](https://stars.renci.org/var/babel_outputs/2024oct24/)
-  ([Babel Translator November 2024 Release](https://github.com/TranslatorSRI/Babel/blob/master/releases/TranslatorHammerheadNovember2024.md))
+  ([Babel Translator November 2024 Release](https://github.com/NCATSTranslator/Babel/blob/main/releases/TranslatorHammerheadNovember2024.md))
 - NameRes: [v1.4.5](https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.4.5)
 Next release: [NameRes v1.4.7](./v1.4.7.md)
 Previous release: [Translator "Guppy" August 2024](./TranslatorGuppyAugust2024.md)
@@ -12,7 +12,7 @@ Previous release: [Translator "Guppy" August 2024](./TranslatorGuppyAugust2024.m
 * Add an MIT license for NameRes in [#169](https://github.com/TranslatorSRI/NameResolution/pull/169).
 * Delete tests/data/test-synonyms.jsonl, which does not appear to be used in [#170](https://github.com/TranslatorSRI/NameResolution/pull/170).
 
-## Babel updates (from [Babel Translator "Hammerhead" November 2024 Release](https://github.com/TranslatorSRI/Babel/blob/master/releases/TranslatorHammerheadNovember2024.md))
+## Babel updates (from [Babel Translator "Hammerhead" November 2024 Release](https://github.com/NCATSTranslator/Babel/blob/main/releases/TranslatorHammerheadNovember2024.md))
 - [New features] Added taxon information to proteins ([#349](https://github.com/TranslatorSRI/Babel/pull/349))
 - [Updates] Upgraded RxNorm to 09032024.
 - [Updates] Changed NCBIGene download from FTP to HTTP.

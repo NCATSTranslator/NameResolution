@@ -35,8 +35,10 @@ def construct_open_api_schema(app) -> Dict[str, str]:
     with open(Path(__file__).parent / 'resources' / 'openapi.yml', 'r') as apd_file:
         api_docs = load(apd_file, Loader=SafeLoader)
 
+    # Already built (FastAPI caches it on the app), so hand back the cached schema.
+    # This is a dict, not a callable -- calling it raises TypeError.
     if app.openapi_schema:
-        return app.openapi_schema()
+        return app.openapi_schema
 
     open_api_schema = get_openapi(
         title=api_docs['info']['title'],
