@@ -315,6 +315,10 @@ POST /synonyms with body:
 - If a CURIE is not found in the database, it will still appear in the response dictionary with an empty object as its value.
 - Concept descriptions are not included: Babel collects them, but they are not carried into the synonym files NameRes
   indexes. Use [NodeNorm](https://nodenormalization-sri.renci.org/)'s `description` flag if you need them.
+- This endpoint returns the underlying Solr document, so it describes a concept differently from `/lookup`: it uses
+  `preferred_name`/`names` rather than `label`/`synonyms`, returns `types` without the `biolink:` prefix, and includes
+  index metadata. We intend to
+  [harmonize the two response shapes](https://github.com/NCATSTranslator/NameResolution/issues/291).
 - For large batches of CURIEs, consider using this endpoint instead of making individual requests, as it is optimized for batch lookups.
 
 ## Health endpoints

@@ -104,7 +104,8 @@ one — excluding them would drop concepts that are simply unannotated.
 Note that "no taxon" looks different between the two endpoints: `/lookup` always returns a `taxa`
 key and gives it an empty list, while `/synonyms` returns the raw Solr document, which simply omits
 the field. Babel's own `taxon_specific` flag is carried through to `/synonyms` if you want the
-distinction as a boolean.
+distinction as a boolean. That inconsistency is ours, not Babel's, and we intend to
+[remove it](https://github.com/NCATSTranslator/NameResolution/issues/291).
 
 ### There are no descriptions
 
