@@ -346,7 +346,7 @@ Solr database.
   },
   "conflations": ["GeneProtein", "DrugChemical"],
   "conflation_url": "https://github.com/NCATSTranslator/Babel/blob/main/docs/Conflation.md",
-  "nameres_version": "v1.5.1",
+  "nameres_version": "v1.7.0",
   "startTime": "2025-12-19T11:53:09.638Z",
   "numDocs": 425583391,
   "maxDoc": 425586610,
