@@ -11,12 +11,19 @@ pipeline. Note that the results returned by this service have been conflated usi
 and DrugChemical conflation; you can read more about this, and about the other Babel behaviour
 visible through this API, at [Where NameRes data comes from](documentation/Babel.md).
 
-* See this [Jupyter Notebook](documentation/NameResolution.ipynb) for examples of use.
-* See the [API documentation](documentation/API.md) for information about the NameRes API.
-* See [Scoring](documentation/Scoring.md) for information about the scoring algorithm used by NameRes.
-* See [Where NameRes data comes from](documentation/Babel.md) for how Babel builds the concepts
-  NameRes searches, and the gotchas that follow from that.
-* See [Deployment](documentation/Deployment.md) for instructions on deploying NameRes.
+## Getting started
+
+The best place to start is the Jupyter Notebook, which walks through the most common use cases with live examples:
+
+* [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/NCATSTranslator/NameResolution/blob/master/documentation/NameResolution.ipynb) [Jupyter Notebook](documentation/NameResolution.ipynb) — interactive examples covering lookup, filtering, autocomplete, bulk lookup, and synonyms
+
+## Documentation
+
+* [Translator Guide](documentation/TranslatorGuide.md) — what to do when results are unexpected, when to use `/synonyms` vs. NodeNorm, and performance tips
+* [API documentation](documentation/API.md) — full reference for all NameRes endpoints
+* [Where NameRes data comes from](documentation/Babel.md) — how Babel builds the concepts NameRes searches, and the gotchas that follow from that
+* [Scoring](documentation/Scoring.md) — how NameRes scores and ranks results
+* [Deployment](documentation/Deployment.md) — instructions for deploying NameRes
 
 ## Reporting a problem
 

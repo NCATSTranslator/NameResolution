@@ -119,6 +119,9 @@ NameRes can be configured by setting environmental variables:
 * `BIOLINK_MODEL_TAG`: The [Biolink Model](https://github.com/biolink/biolink-model) tag the Solr
   index was built against (defaults to `master`, e.g. `v4.2.6-rc5`). `/status` derives the model URL
   and download URL from it.
+* `CONFLATIONS`: Comma-separated list of the Babel conflations baked into this index, reported by
+  `/status` (defaults to `GeneProtein,DrugChemical`). Set this if you load an index built with a
+  different set -- it is not detected from the data.
 * `OTEL_ENABLED`: Turn on Open TELemetry (default: `'false'`) -- only `'true'` will turn this on.
     * `JAEGER_HOST` and `JAEGER_PORT`: Hostname and port for the Jaegar instance to provide telemetry to.
     * `JAEGER_SERVICE_NAME`: The name of this service (defaults to the value of `SERVER_NAME`)

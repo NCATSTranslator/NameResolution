@@ -74,6 +74,11 @@ async def status() -> Dict:
     babel_version = os.environ.get("BABEL_VERSION", "unknown")
     babel_version_url = os.environ.get("BABEL_VERSION_URL", "")
 
+    # Which conflations are active in this deployment? Baked in at data-loading time.
+    conflations_raw = os.environ.get("CONFLATIONS", "GeneProtein,DrugChemical")
+    conflations = [c.strip() for c in conflations_raw.split(",") if c.strip()]
+    conflation_url = "https://github.com/NCATSTranslator/Babel/blob/master/docs/Conflation.md"
+
     # Look up the BIOLINK_MODEL_TAG.
     # Note: this should be a tag from the Biolink Model repo, e.g. "master" or "v4.3.6".
     biolink_model_tag = os.environ.get("BIOLINK_MODEL_TAG", "master")
@@ -110,6 +115,8 @@ async def status() -> Dict:
                 'url': biolink_model_url,
                 'download_url': biolink_model_download_url,
             },
+            'conflations': conflations,
+            'conflation_url': conflation_url,
             'nameres_version': nameres_version,
             # .get() rather than [], like every field below it: Solr's core STATUS
             # returns a sparse entry for a core that is still initializing, and
@@ -135,6 +142,8 @@ async def status() -> Dict:
                 'url': biolink_model_url,
                 'download_url': biolink_model_download_url,
             },
+            'conflations': conflations,
+            'conflation_url': conflation_url,
             'nameres_version': nameres_version,
         }
 
