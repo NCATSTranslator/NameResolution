@@ -1,7 +1,7 @@
 # NameRes Translator "Fugu" July 2024 Release
 - Babel: [2024jul13](https://stars.renci.org/var/babel_outputs/2024jul13/)
   ([Babel Translator July 2024 Release](https://github.com/NCATSTranslator/Babel/blob/main/releases/TranslatorFuguJuly2024.md))
-- NameRes: [v1.3.14](https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.14)
+- NameRes: [v1.3.14](https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.14)
 
 Next release: [Translator "Guppy" August 2024](./TranslatorGuppyAugust2024.md)
 
@@ -22,6 +22,6 @@ Next release: [Translator "Guppy" August 2024](./TranslatorGuppyAugust2024.md)
 * [Update] Updated PANTHER pathways from SequenceAssociationPathway3.6.7.txt to SequenceAssociationPathway3.6.8.txt.
 
 ## Releases since [Translator May 2024](./TranslatorMay2024.md)
-* [1.3.14](https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.14): Forgot to increment version number in
+* [1.3.14](https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.14): Forgot to increment version number in
   previous release.
-* [1.3.13](https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.13): Added release notes for Translator May 2024.
+* [1.3.13](https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.13): Added release notes for Translator May 2024.

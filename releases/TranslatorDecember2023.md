@@ -1,7 +1,7 @@
 # NameRes Translator December 2023 Release
 
 - Babel: [2023nov5](https://stars.renci.org/var/babel_outputs/2023nov5/)
-- NameRes: [v1.3.11](https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.11)
+- NameRes: [v1.3.11](https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.11)
 
 Next release: [Translator May 2024](TranslatorMay2024.md)
 
@@ -24,9 +24,9 @@ Next release: [Translator May 2024](TranslatorMay2024.md)
 
 ## Releases since [Translator October 2023 release](TranslatorOctober2023.md)
 
-* https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.7
+* https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.7
   * fixes reverse lookup get endpoint. by @YaphetKG in #102
-* https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.8
+* https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.8
   * Fix Terms of Service and service description by @gaurav in #114
   * Return entire document in reverse lookups by @gaurav in #115
   * Report scores for reverse lookup by @gaurav in #116
@@ -34,9 +34,9 @@ Next release: [Translator May 2024](TranslatorMay2024.md)
   * Add an autocomplete flag by @gaurav in #118
   * Added a /status endpoint that tells us about this NameRes instance by @gaurav in #119
   * Added instruction to make data/synonyms directory in target data/synonyms/done by @gaurav in #123
-* https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.9
+* https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.9
   * Otel instrumentation by @YaphetKG in #121
-* https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.10
+* https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.10
   * Update server.py by @YaphetKG in #130
-* https://github.com/TranslatorSRI/NameResolution/releases/tag/v1.3.11
+* https://github.com/NCATSTranslator/NameResolution/releases/tag/v1.3.11
   * Incremented version that I forgot to do in Name Resolver v1.3.10.
