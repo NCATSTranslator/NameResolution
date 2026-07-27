@@ -17,7 +17,7 @@ instance or from Translator.
    with [Docker Compose](https://docs.docker.com/compose/install/).
 2. Create the local directory where your Solr data will be stored -- by default, this is
    `./data/solr` in this directory, but you can change this in
-   [docker-compose.yml](./docker-compose.yml). This directory will need to have a maximum
+   [docker-compose.yml](../docker-compose.yml). This directory will need to have a maximum
    storage of approx 400G: 104G of the downloaded file (which can be deleted once decompressed),
    147G of uncompressed backup (both of which can be deleted once restored) and 147G of
    Apache Solr databases.
@@ -40,7 +40,7 @@ instance or from Translator.
    ordinary user gives the files to you instead, and Solr will fail to load the core.
    For a backup built before this was the case, or if you see permission errors in the
    Solr log, fix it with `sudo chown -R 8983:8983 ./data/solr/name_lookup`.
-5. Check the [docker-compose.yml](./docker-compose.yml) file to ensure that it is
+5. Check the [docker-compose.yml](../docker-compose.yml) file to ensure that it is
    as you expect.
     * The Docker Compose file will use the latest released version of NameRes
       as the frontend. To use the source code in this repository, you will need to change
@@ -75,11 +75,11 @@ instance or from Translator.
 
 #### Loading from synonyms files
 
-The best way to do this is by using the [data-loading Docker image](./data-loading/README.md).
+The best way to do this is by using the [data-loading Docker image](../data-loading/README.md).
 
 ### Python packaging
 
-Currently, NameRes is only packaged as a Docker image (see [Dockerfile](./Dockerfile)), but you can
+Currently, NameRes is only packaged as a Docker image (see [Dockerfile](../Dockerfile)), but you can
 also run it directly via Uvicorn.
 
 ```bash

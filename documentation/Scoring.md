@@ -15,7 +15,7 @@ If multiple terms are matched in the same document, the sum of the score for eac
 The TF*IDF score will be multiplied by [several boosts](https://github.com/NCATSTranslator/NameResolution/blob/56e2151bb9e6fd120644cebdf4ff45b3bc47da05/api/server.py#L436-L461)
 that depend on four factors:
 * We index two fields: the "preferred name" of every clique and the "synonyms" of every clique. The [preferred name
-  is chosen by Babel](https://github.com/NCATSTranslator/Babel?tab=readme-ov-file#how-does-babel-choose-a-preferred-label-for-a-clique),
+  is chosen by Babel](https://github.com/NCATSTranslator/Babel/blob/master/docs/Understanding.md),
   while the synonyms are collected from all the different Babel sources.
 * We set up two indexes: a [StandardTokenizer](https://solr.apache.org/guide/solr/latest/indexing-guide/tokenizers.html#standard-tokenizer)
   that splits the field into tokens at whitespace and punctuation characters, and a
