@@ -59,26 +59,29 @@ pip install -r requirements.txt
 4. Results are scored, normalized, and returned as JSON
 
 ### Key Files
-- `api/server.py` - Core FastAPI application (~717 lines): all endpoints, Pydantic models, Solr query construction, environment config
+- `api/server.py` - Core FastAPI application: all endpoints, Pydantic models, Solr query construction, environment config
 - `api/apidocs.py` - Custom OpenAPI schema construction
-- `api/resources/.openapi.yml` - OpenAPI 3.0.2 spec with service metadata
+- `api/resources/openapi.yml` - OpenAPI 3.0.2 spec with service metadata
 - `main.py` / `main.sh` - WSGI/ASGI entry points (port 2433)
 - `tests/test_service.py` - Integration tests using FastAPI `TestClient`
 - `tests/data/test-synonyms.json` - Test dataset for Solr
 
 ### Environment Variables
-- `SOLR_HOST` / `SOLR_PORT` - Solr connection (default: `localhost:8983`)
+See `documentation/Deployment.md` for the full list. The main ones:
+- `SOLR_HOST` / `SOLR_PORT` / `SOLR_CORE` - Solr connection (default: `localhost:8983`, core `name_lookup`)
 - `LOGLEVEL` - Logging level
-- `SERVER_ROOT` - API root path prefix
+- `SERVER_NAME` / `SERVER_ROOT` - Infores ID and API root path prefix
 - `MATURITY_VALUE` / `LOCATION_VALUE` - TRAPI metadata fields
+- `BABEL_VERSION` / `BABEL_VERSION_URL` / `BIOLINK_MODEL_TAG` - reported by `/status`; describe the
+  data the index was built from
+- `OTEL_ENABLED` / `JAEGER_*` - OpenTelemetry
 
 ### API Endpoints
 - `GET/POST /lookup` - Primary name-to-CURIE lookup with scoring
 - `POST /bulk-lookup` - Batch queries via `NameResQuery` model
-- `GET /reverse-lookup` - CURIE-to-names lookup
-- `POST /synonyms` - Get synonyms for a list of CURIEs
-- `POST /lookup-curies` - Filter existing CURIEs with type subsetting
-- `GET /status` - Health check with Solr document counts
+- `GET/POST /synonyms` - Get synonyms for a list of preferred CURIEs
+- `GET/POST /reverse_lookup` - Deprecated alias for `/synonyms`
+- `GET /status` - Health check with Solr document counts, plus the Babel and Biolink versions
 
 ### Data Model
 Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and biolink type information. Lookup results are `LookupResult` objects with scoring fields. Results are conflated using GeneProtein and DrugChemical conflation rules.
@@ -91,6 +94,9 @@ Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and b
 
 ## Documentation
 - `documentation/API.md` - Endpoint reference
+- `documentation/Babel.md` - Where the data comes from, and the Babel behaviour visible through this
+  API. This is the only file that should link to a *specific file* inside the Babel repository; keep
+  new cross-repo links here so a reorganization there is a one-file fix.
 - `documentation/Deployment.md` - Docker/Kubernetes deployment guide
 - `documentation/Scoring.md` - Scoring algorithm details
 - `documentation/NameResolution.ipynb` - Interactive usage examples

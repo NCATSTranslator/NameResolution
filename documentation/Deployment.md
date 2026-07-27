@@ -109,6 +109,16 @@ NameRes can be configured by setting environmental variables:
 * `SERVER_ROOT`: The server root (defaults to `/`)
 * `MATURITY_VALUE`: How mature is this NameRes (defaults to `maturity`, e.g. `development`)
 * `LOCATION_VALUE`: Where is this NameRes setup (defaults to `location`, e.g. `RENCI`)
+* `LOGLEVEL`: The Python logging level (defaults to `INFO`).
+* `BABEL_VERSION`: The [Babel](https://github.com/NCATSTranslator/Babel) release this Solr index was
+  built from, reported by `/status` (defaults to `unknown`, e.g. `2025sep1`). Set this when you load
+  an index -- it is the only record of which data an instance is serving, and `/status` is where
+  users look for it. See [Where NameRes data comes from](./Babel.md).
+* `BABEL_VERSION_URL`: URL of the changelog for that Babel release, also reported by `/status`
+  (defaults to empty).
+* `BIOLINK_MODEL_TAG`: The [Biolink Model](https://github.com/biolink/biolink-model) tag the Solr
+  index was built against (defaults to `master`, e.g. `v4.2.6-rc5`). `/status` derives the model URL
+  and download URL from it.
 * `OTEL_ENABLED`: Turn on Open TELemetry (default: `'false'`) -- only `'true'` will turn this on.
     * `JAEGER_HOST` and `JAEGER_PORT`: Hostname and port for the Jaegar instance to provide telemetry to.
     * `JAEGER_SERVICE_NAME`: The name of this service (defaults to the value of `SERVER_NAME`)

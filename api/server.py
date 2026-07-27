@@ -179,8 +179,8 @@ async def reverse_lookup_get(
     "/synonyms",
     summary="Look up synonyms for a CURIE.",
     description="<p>Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm.</p>"
-                "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#bulk-lookup\">API documentation</a>.</p>"
-                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
+                "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#synonyms\">API documentation</a>.</p>"
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#conflation\">Conflation documentation</a> for more information.</p>",
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
@@ -216,7 +216,7 @@ async def lookup_names_post(
     summary="Look up synonyms for a CURIE.",
     description="<p>Returns a list of synonyms for a particular preferred CURIE. You can normalize a CURIE to a preferred CURIE using NodeNorm.</p>"
                 "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#synonyms\">API documentation</a>.</p>"
-                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#conflation\">Conflation documentation</a> for more information.</p>",
     response_model=Dict[str, Dict],
     tags=["lookup"],
 )
@@ -274,7 +274,7 @@ class LookupResult(BaseModel):
      summary="Look up cliques for a fragment of a name or synonym.",
      description="<p>Returns cliques with a name or synonym that contains a specified string.</p>"
                  "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>.</p>"
-                 "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
+                 "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#conflation\">Conflation documentation</a> for more information.</p>",
      response_model=List[LookupResult],
      tags=["lookup"]
 )
@@ -338,7 +338,7 @@ async def lookup_curies_get(
     summary="Look up cliques for a fragment of a name or synonym.",
     description="<p>Returns cliques with a name or synonym that contains a specified string.</p>"
                 "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>.</p>"
-                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
+                "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#conflation\">Conflation documentation</a> for more information.</p>",
     response_model=List[LookupResult],
     tags=["lookup"]
 )
@@ -692,7 +692,7 @@ class NameResQuery(BaseModel):
           summary="Look up cliques for a fragment of multiple names or synonyms.",
           description="<p>Returns cliques for each query.</p>"
                       "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#bulk-lookup\">API documentation</a>.</p>"
-                      "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
+                      "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. a protein that encodes a gene can be looked up with the gene's CURIE, not the protein's CURIE. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#conflation\">Conflation documentation</a> for more information.</p>",
           response_model=Dict[str, List[LookupResult]],
           tags=["lookup"]
 )
