@@ -1,6 +1,7 @@
 name: 'Release a new version of NameResolution Data Loading to Github Packages'
 
 on:
+    push:
     release:
         types: [published]
 
