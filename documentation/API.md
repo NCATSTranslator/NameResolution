@@ -333,6 +333,69 @@ Solr database.
   "version": 34838,
   "segmentCount": 57,
   "lastModified": "2025-09-24T19:09:56.524Z",
-  "size": "142.17 GB"
+  "size": "142.17 GB",
+  "recent_queries": {
+    "max": 50000,
+    "count": 50000,
+    "mean_time_ms": 42.3,
+    "mean_solr_time_ms": 38.1,
+    "p50_ms": 21.0,
+    "p95_ms": 140.5,
+    "p99_ms": 410.2
+  },
+  "solr_metrics": {
+    "query_handler": {
+      "requests": 9842301,
+      "errors": 0,
+      "timeouts": 0,
+      "mean_ms": 41.2,
+      "p50_ms": 30.0,
+      "p95_ms": 120.3,
+      "p99_ms": 340.7
+    },
+    "cache": {
+      "filterCache": {
+        "hitratio": 0.94,
+        "lookups": 8200000,
+        "hits": 7708000,
+        "evictions": 2100,
+        "size": 8192
+      },
+      "queryResultCache": {
+        "hitratio": 0.91,
+        "lookups": 5400000,
+        "hits": 4914000,
+        "evictions": 1240,
+        "size": 512
+      }
+    },
+    "jvm": {
+      "heap_used_mb": 4096.0,
+      "heap_max_mb": 8192.0,
+      "heap_used_pct": 50.0,
+      "cpu_load": 0.12,
+      "gc_count": 18342,
+      "gc_time_ms": 91260
+    },
+    "host": {
+      "available_processors": 8,
+      "system_load_average": 3.4,
+      "system_cpu_load": 0.42,
+      "total_physical_mem_mb": 65536.0
+    }
+  }
 }
 ```
+
+`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `max` is the size of the tracking window (default 50000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `count` is how many queries have actually been recorded so far. `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. `p50_ms`/`p95_ms`/`p99_ms` are the end-to-end latency percentiles the caller actually sees; comparing them against `solr_metrics.query_handler`'s Solr-side percentiles localizes a latency tail to Solr vs. NameRes. These are computed from local data (no Solr round-trip), so they are present on the default `/status` path. All of these are `null` until at least a couple of queries have been handled.
+
+`solr_metrics` is only populated when the `?full=true` query parameter is passed, as fetching it requires an additional round-trip to Solr; the default `/status` stays cheap for Kubernetes liveness probes. Without `?full=true`, the field holds a short `{"message": ...}` placeholder.
+
+`solr_metrics` is populated directly from Solr's `/admin/metrics` API and provides native Solr health indicators. Any individual field is `null` when the underlying Solr metric is unavailable (e.g. a cache that isn't configured); if the whole metrics API is unreachable, the placeholder message is retained. The sub-blocks are:
+
+- `query_handler` — cumulative `/select` request count plus error/timeout counts and Solr-side latency percentiles (`p50_ms`/`p95_ms`/`p99_ms`). A widening gap between `p50_ms` and `p99_ms`, or non-zero `timeouts`, indicates Solr-side strain.
+- `cache` — `filterCache` and `queryResultCache`, each with `hitratio`, `lookups`, `hits`, `evictions`, and `size`. A low hit ratio with high evictions means the cache is undersized for the query mix; NameRes filters heavily (`fq`), so `filterCache` usually matters most.
+- `jvm` — Solr's heap (`heap_used_mb`/`heap_max_mb`/`heap_used_pct`), process `cpu_load`, and cumulative GC activity (`gc_count`/`gc_time_ms`). Rising `gc_time_ms` relative to uptime signals heap pressure.
+- `host` — the machine Solr runs on, for **sizing the pod's CPU/memory requests**: `available_processors`, `system_load_average`, `system_cpu_load`, and `total_physical_mem_mb`. Because Solr mmaps its index, physical memory beyond the heap becomes OS page cache for the (read-only) index — so the pod generally wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. (Free physical memory is intentionally not reported: Solr's JVM exposes only Linux `MemFree`, which excludes page cache and so reads near-zero on a healthy node — misleading rather than useful. For a true page-cache view of the Solr host, run a node-level exporter such as node_exporter/Prometheus there.)
+
+For how to read these metrics together — including a decision tree for CPU vs. memory vs. load — see [Performance.md](Performance.md).
