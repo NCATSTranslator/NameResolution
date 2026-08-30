@@ -17,7 +17,7 @@ instance or from Translator.
    with [Docker Compose](https://docs.docker.com/compose/install/).
 2. Create the local directory where your Solr data will be stored -- by default, this is
    `./data/solr` in this directory, but you can change this in
-   [docker-compose.yml](./docker-compose.yml). This directory will need to have a maximum
+   [docker-compose.yml](../docker-compose.yml). This directory will need to have a maximum
    storage of approx 400G: 104G of the downloaded file (which can be deleted once decompressed),
    147G of uncompressed backup (both of which can be deleted once restored) and 147G of
    Apache Solr databases.
@@ -40,7 +40,7 @@ instance or from Translator.
    ordinary user gives the files to you instead, and Solr will fail to load the core.
    For a backup built before this was the case, or if you see permission errors in the
    Solr log, fix it with `sudo chown -R 8983:8983 ./data/solr/name_lookup`.
-5. Check the [docker-compose.yml](./docker-compose.yml) file to ensure that it is
+5. Check the [docker-compose.yml](../docker-compose.yml) file to ensure that it is
    as you expect.
     * The Docker Compose file will use the latest released version of NameRes
       as the frontend. To use the source code in this repository, you will need to change
@@ -75,11 +75,11 @@ instance or from Translator.
 
 #### Loading from synonyms files
 
-The best way to do this is by using the [data-loading Docker image](./data-loading/README.md).
+The best way to do this is by using the [data-loading Docker image](../data-loading/README.md).
 
 ### Python packaging
 
-Currently, NameRes is only packaged as a Docker image (see [Dockerfile](./Dockerfile)), but you can
+Currently, NameRes is only packaged as a Docker image (see [Dockerfile](../Dockerfile)), but you can
 also run it directly via Uvicorn.
 
 ```bash
@@ -109,6 +109,19 @@ NameRes can be configured by setting environmental variables:
 * `SERVER_ROOT`: The server root (defaults to `/`)
 * `MATURITY_VALUE`: How mature is this NameRes (defaults to `maturity`, e.g. `development`)
 * `LOCATION_VALUE`: Where is this NameRes setup (defaults to `location`, e.g. `RENCI`)
+* `LOGLEVEL`: The Python logging level (defaults to `INFO`).
+* `BABEL_VERSION`: The [Babel](https://github.com/NCATSTranslator/Babel) release this Solr index was
+  built from, reported by `/status` (defaults to `unknown`, e.g. `2025sep1`). Set this when you load
+  an index -- it is the only record of which data an instance is serving, and `/status` is where
+  users look for it. See [Where NameRes data comes from](./Babel.md).
+* `BABEL_VERSION_URL`: URL of the changelog for that Babel release, also reported by `/status`
+  (defaults to empty).
+* `BIOLINK_MODEL_TAG`: The [Biolink Model](https://github.com/biolink/biolink-model) tag the Solr
+  index was built against (defaults to `master`, e.g. `v4.2.6-rc5`). `/status` derives the model URL
+  and download URL from it.
+* `CONFLATIONS`: Comma-separated list of the Babel conflations baked into this index, reported by
+  `/status` (defaults to `GeneProtein,DrugChemical`). Set this if you load an index built with a
+  different set -- it is not detected from the data.
 * `OTEL_ENABLED`: Turn on Open TELemetry (default: `'false'`) -- only `'true'` will turn this on.
     * `JAEGER_HOST` and `JAEGER_PORT`: Hostname and port for the Jaegar instance to provide telemetry to.
     * `JAEGER_SERVICE_NAME`: The name of this service (defaults to the value of `SERVER_NAME`)
