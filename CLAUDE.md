@@ -70,6 +70,7 @@ pip install -r requirements.txt
 ### Environment Variables
 - `SOLR_HOST` / `SOLR_PORT` - Solr connection (default: `localhost:8983`)
 - `SOLR_MAX_CONCURRENT_LOOKUPS` / `SOLR_TIMEOUT_SECONDS` - Bulk-lookup fan-out bound and Solr query timeout (see `documentation/Deployment.md`)
+- `NAMERES_MINIMUM_QUERY_LENGTH` - Shortest query `/lookup` and `/bulk-lookup` will search for (default: 2)
 - `LOGLEVEL` - Logging level
 - `SERVER_ROOT` - API root path prefix
 - `MATURITY_VALUE` / `LOCATION_VALUE` - TRAPI metadata fields
