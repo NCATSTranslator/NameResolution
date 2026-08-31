@@ -178,3 +178,45 @@ def test_exact_filter_query_is_not_cached():
         f"Expected the exactish filter query in the debug output, got: {debug_info}"
     assert 'cache=false' in debug_info, \
         f"Expected the exactish filter query to be marked uncached, got: {debug_info}"
+
+
+def test_exact_combines_with_the_other_filters():
+    """
+    The exactish clause is appended to the same filter list as biolink_type, only_taxa and the
+    prefix filters, so they have to keep working together -- filtering an exact lookup to a type is
+    exactly what an NER pipeline resolving into a known category would do.
+    """
+    client = TestClient(app)
+
+    base = {'string': 'parkinsonian disorder', 'exact': 'label', 'limit': 100}
+    assert 'HP:0001300' in [r['curie'] for r in client.get("/lookup", params=base).json()]
+
+    # HP:0001300 is a PhenotypicFeature, so filtering to it keeps the result...
+    response = client.get("/lookup", params={**base, 'biolink_type': 'biolink:PhenotypicFeature'})
+    assert 'HP:0001300' in [r['curie'] for r in response.json()]
+
+    # ...and filtering to an unrelated type removes it without disturbing the exact match itself.
+    response = client.get("/lookup", params={**base, 'biolink_type': 'biolink:Gene'})
+    assert 'HP:0001300' not in [r['curie'] for r in response.json()]
+
+    # The prefix filters apply the same way.
+    response = client.get("/lookup", params={**base, 'only_prefixes': 'MONDO'})
+    assert 'HP:0001300' not in [r['curie'] for r in response.json()]
+
+    response = client.get("/lookup", params={**base, 'exclude_prefixes': 'HP'})
+    assert 'HP:0001300' not in [r['curie'] for r in response.json()]
+
+
+def test_exact_rejects_autocomplete_in_bulk_lookup():
+    """
+    The 400 is raised inside lookup(), which bulk_lookup() now runs under asyncio.gather(), so
+    check the exception still surfaces as a 400 rather than being swallowed into a 500.
+    """
+    client = TestClient(app)
+    response = client.post("/bulk-lookup", json={
+        'strings': ['parkinsonian disorder', 'Parkinson disease'],
+        'exact': 'any',
+        'autocomplete': True,
+    })
+    assert response.status_code == 400
+    assert 'autocomplete' in response.json()['detail']

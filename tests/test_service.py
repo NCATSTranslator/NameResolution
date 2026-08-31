@@ -329,3 +329,25 @@ def test_solr_settings_are_sane():
     assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS >= 1
     # A stalled Solr connection must not be able to pin a bulk request forever by default.
     assert api.server.SOLR_TIMEOUT is None or api.server.SOLR_TIMEOUT > 0
+
+
+def test_concurrency_limit_is_clamped_to_at_least_one(monkeypatch):
+    """
+    SOLR_MAX_CONCURRENT_LOOKUPS=0 would build a semaphore nobody can ever acquire, hanging every
+    bulk lookup with no error and no log line. The clamp runs at import, so this has to reload the
+    module to exercise it.
+    """
+    import importlib
+
+    try:
+        monkeypatch.setenv("SOLR_MAX_CONCURRENT_LOOKUPS", "0")
+        importlib.reload(api.server)
+        assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS == 1
+
+        monkeypatch.setenv("SOLR_MAX_CONCURRENT_LOOKUPS", "25")
+        importlib.reload(api.server)
+        assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS == 25
+    finally:
+        # Restore the module for whatever runs next, since reload mutates it in place.
+        monkeypatch.delenv("SOLR_MAX_CONCURRENT_LOOKUPS", raising=False)
+        importlib.reload(api.server)
