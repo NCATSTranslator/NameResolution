@@ -249,7 +249,9 @@ Both `/lookup` and `/bulk-lookup` accept an `exact` parameter, which replaces th
 
 Note that a concept's preferred name is not necessarily one of its synonyms, so `label` and `synonyms` can genuinely disagree. For example, HP:0001300 has the preferred name `parkinsonian disorder` and the single synonym `Parkinsonian disease`; searching for `parkinsonian disorder` with `exact=label` finds it, but with `exact=synonyms` it does not.
 
-Exact matching is implemented as a Solr filter query, which Solr caches, so repeated exact lookups of the same string are considerably cheaper than the equivalent tokenized search. It is intended for callers such as named entity recognition pipelines that need to resolve large numbers of exact strings.
+Exact matching is implemented as a Solr filter query, which is cheaper than the equivalent tokenized search because there is nothing to score: no eDisMax parsing, no phrase or field boosts, just a term lookup against a field that holds each name as a single token. It is intended for callers such as named entity recognition pipelines that need to resolve large numbers of exact strings.
+
+That filter is deliberately marked uncached (`{!cache=false}`). Solr's filterCache is bounded by entry count rather than memory, and it holds the shared, reusable filters — `types:`, `taxa:`, `curie:` — that nearly every search benefits from. An exact-match clause is one distinct entry per distinct search string, so caching it would let a single bulk NER request evict the entire cache and slow down the ordinary search path, in exchange for a hit rate near zero on its own entries. Repeated *identical* exact lookups are still served from the queryResultCache, which caches the whole result and is bounded by RAM.
 
 Because there is no relevance score to rank by in exact mode, results are sorted by `clique_identifier_count` (descending) and then CURIE suffix (ascending), rather than by score. The `score` field is still present in each result, but it carries no ranking information.
 

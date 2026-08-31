@@ -586,19 +586,30 @@ async def lookup(string: str,
         inner_params['debug.explain.structured'] = 'true'
 
     if exact:
-        # Exact mode: bypass eDisMax entirely and use a filter query against the *_exactish fields.
-        # Unlike the default query below, which matches the string's tokens in any order, this requires
-        # the whole string to match (case-insensitively -- see the exactish fieldType in the schema).
-        # Filter queries are cached by Solr, making repeated lookups of the same term very fast.
+        # Exact mode: bypass eDisMax entirely and match with a filter query against the *_exactish
+        # fields. Unlike the default query below, which matches the string's tokens in any order,
+        # this requires the whole string to match (case-insensitively -- see the exactish fieldType
+        # in the schema). A filter query is the right shape for that: there is nothing to score.
         string_lc_escaped = string_lc.replace('\\', '\\\\').replace('"', '\\"')
         if exact == ExactMatchMode.label:
-            filters.append(f'preferred_name_exactish:"{string_lc_escaped}"')
+            exact_clause = f'preferred_name_exactish:"{string_lc_escaped}"'
         elif exact == ExactMatchMode.synonyms:
-            filters.append(f'names_exactish:"{string_lc_escaped}"')
+            exact_clause = f'names_exactish:"{string_lc_escaped}"'
         else:  # ExactMatchMode.any
-            filters.append(
+            exact_clause = (
                 f'(preferred_name_exactish:"{string_lc_escaped}" OR names_exactish:"{string_lc_escaped}")'
             )
+
+        # Marked uncached deliberately. Solr's filterCache is an entry count, not a size in bytes
+        # (solrconfig.xml sets 512 entries), and the entries it holds are shared, reusable filters
+        # like types: and taxa: that nearly every search benefits from. This clause is the opposite
+        # of that: one distinct entry per distinct search string. The workload exact mode exists to
+        # serve -- an NER pipeline resolving large numbers of *different* strings -- would therefore
+        # evict the whole cache on every request and slow down the ordinary search path as
+        # collateral damage, in exchange for a hit rate near zero on its own entries. Repeated
+        # identical exact lookups are still served from the queryResultCache, which is bounded by
+        # RAM rather than by entry count and caches the whole (query, filters, sort) result.
+        filters.append(f'{{!cache=false}}{exact_clause}')
         params = {
             "query": "*:*",
             "filter": filters,

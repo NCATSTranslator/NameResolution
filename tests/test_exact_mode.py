@@ -1,5 +1,6 @@
 # This file tests the exact-match mode (the `exact` parameter) on the lookup and bulk_lookup
 # endpoints. Tests for the default, tokenized search live in test_service.py.
+import json
 import logging
 
 from api.server import app
@@ -148,3 +149,32 @@ def test_exact_does_not_rewrite_smart_quotes():
         'string': 'Parkinson’s disease', 'exact': 'synonyms', 'limit': 100,
     })
     assert 'MONDO:0005180' not in [r['curie'] for r in response.json()]
+
+
+def test_exact_filter_query_is_not_cached():
+    """
+    The exactish clause must stay marked uncached.
+
+    It is one distinct filterCache entry per distinct search string, and the filterCache is bounded
+    by entry count (512), so caching it would evict the shared types:/taxa:/curie: filters that the
+    ordinary search path relies on -- for a hit rate near zero on exactly the workload exact mode
+    exists to serve. See the comment in lookup().
+    """
+    client = TestClient(app)
+    response = client.get("/lookup", params={
+        'string': 'parkinsonian disorder',
+        'exact': 'label',
+        'debug': 'query',
+        'limit': 100,
+    })
+    assert response.status_code == 200
+    results = response.json()
+    assert results, "Expected at least one result to carry the debug information."
+
+    # Dump the whole debug structure rather than reaching for a particular Solr key, since the
+    # question is only whether the filter went to Solr marked uncached.
+    debug_info = json.dumps(results[0]['debug'])
+    assert 'preferred_name_exactish' in debug_info, \
+        f"Expected the exactish filter query in the debug output, got: {debug_info}"
+    assert 'cache=false' in debug_info, \
+        f"Expected the exactish filter query to be marked uncached, got: {debug_info}"
