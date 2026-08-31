@@ -1,8 +1,10 @@
 # This file tests the exact-match mode (the `exact` parameter) on the lookup and bulk_lookup
 # endpoints. Tests for the default, tokenized search live in test_service.py.
+import dataclasses
 import json
 import logging
 
+import api.server
 from api.server import app
 from fastapi.testclient import TestClient
 
@@ -221,3 +223,35 @@ def test_exact_rejects_autocomplete_in_bulk_lookup():
     })
     assert response.status_code == 400
     assert 'autocomplete' in response.json()['detail']
+
+
+def test_exact_is_not_subject_to_the_minimum_query_length(monkeypatch):
+    """
+    config.minimum_query_length guards the default tokenized search, where a very short query is
+    slow and useless. Exact mode is a single filter query against an untokenized field, and short
+    labels are real -- the gene T, the element symbols, and "AD" for Alzheimer disease here -- so
+    the minimum must not apply to it.
+
+    The minimum is raised well above the query length rather than relying on the default of 2,
+    so that the test says something whatever the deployment default becomes.
+    """
+    client = TestClient(app)
+    monkeypatch.setattr(api.server, "config",
+                        dataclasses.replace(api.server.config, minimum_query_length=5))
+
+    # "AD" is a synonym of MONDO:0004975 (Alzheimer disease), and shorter than the minimum.
+    response = client.get("/lookup", params={'string': 'AD', 'exact': 'synonyms', 'limit': 100})
+    assert response.status_code == 200
+    assert 'MONDO:0004975' in [r['curie'] for r in response.json()]
+
+    # The same query without exact mode is still rejected, which is what makes the case above a
+    # property of exact mode rather than of the minimum being unset.
+    response = client.get("/lookup", params={'string': 'AD', 'limit': 100})
+    assert response.status_code == 422
+
+    # Exemption from the minimum is not exemption from the empty check: an empty exact query
+    # would still reach Solr as an unparseable query and come back as a 500.
+    for string in ('', '   '):
+        response = client.get("/lookup", params={'string': string, 'exact': 'any'})
+        assert response.status_code == 422, \
+            f"Expected exact lookup of {string!r} to be rejected, got HTTP {response.status_code}"

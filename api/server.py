@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
 
 from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import RedirectResponse
 import httpx
 from pydantic import BaseModel, Field
@@ -332,22 +333,15 @@ class LookupResult(BaseModel):
                  "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>.</p>"
                  "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
      response_model=List[LookupResult],
-     responses={
-         422: {
-             "description": "The request was rejected without being searched. This includes queries shorter "
-                            "than the configured minimum length (see `minimum_query_length` in `/status`, "
-                            "default 2 characters after leading/trailing whitespace is stripped), since "
-                            "single-character queries are slow and never return useful results, as well as any "
-                            "other request parameter that failed validation."
-         }
-     },
      tags=["lookup"]
 )
 async def lookup_curies_get(
         string: Annotated[str, Query(
             description="The string to search for. Must be at least the configured minimum length "
                         "(see `minimum_query_length` in `/status`, default 2) after leading/trailing "
-                        "whitespace is stripped; shorter queries are rejected with HTTP 422."
+                        "whitespace is stripped; shorter queries are rejected with HTTP 422. The "
+                        "minimum does not apply when `exact` is set, where any non-empty string is "
+                        "searched for."
         )],
         autocomplete: Annotated[bool, Query(
             description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
@@ -413,22 +407,15 @@ async def lookup_curies_get(
                 "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#lookup\">API documentation</a>.</p>"
                 "<p>Note that CURIEs are conflated with both GeneProtein and DrugChemical conflation, so that e.g. when searching for a protein, the identifier of the gene that encodes the protein will be returned itself. See <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#Conflation\">Conflation documentation</a> for more information.</p>",
     response_model=List[LookupResult],
-    responses={
-        422: {
-            "description": "The request was rejected without being searched. This includes queries shorter "
-                           "than the configured minimum length (see `minimum_query_length` in `/status`, "
-                           "default 2 characters after leading/trailing whitespace is stripped), since "
-                           "single-character queries are slow and never return useful results, as well as any "
-                           "other request parameter that failed validation."
-        }
-    },
     tags=["lookup"]
 )
 async def lookup_curies_post(
         string: Annotated[str, Query(
             description="The string to search for. Must be at least the configured minimum length "
                         "(see `minimum_query_length` in `/status`, default 2) after leading/trailing "
-                        "whitespace is stripped; shorter queries are rejected with HTTP 422."
+                        "whitespace is stripped; shorter queries are rejected with HTTP 422. The "
+                        "minimum does not apply when `exact` is set, where any non-empty string is "
+                        "searched for."
         )],
         autocomplete: Annotated[bool, Query(
             description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
@@ -545,14 +532,33 @@ async def lookup(string: str,
     if not exact:
         string_lc = re.sub(r"[“”]", '"', re.sub(r"[‘’]", "'", string_lc))
 
-    # Is the query long enough to be worth searching? Single-character queries are
-    # slow in Solr and never return useful results (see config.minimum_query_length).
-    if len(string_lc) < config.minimum_query_length:
+    # Is the query long enough to be worth searching?
+    #
+    # config.minimum_query_length exists because short queries are slow in the default tokenized
+    # search -- a one-character query matches a prefix of half the index -- and never return
+    # anything useful. Exact mode has neither problem: it is a single filter query against an
+    # untokenized field, and single-character labels are real (the gene T, the element symbols),
+    # so the minimum would put them permanently out of reach for no gain. It is therefore held to
+    # nothing but non-emptiness.
+    #
+    # The floor of 1 is not redundant with the setting. An empty query is rejected whatever
+    # minimum_query_length is set to, because it would otherwise reach Solr as `"" OR ()` and come
+    # back as a parse error -- an HTTP 500 for what is really an empty search box.
+    minimum_length = 1 if exact else max(1, config.minimum_query_length)
+    if len(string_lc) < minimum_length:
         if raise_on_too_short:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Query string must be at least {config.minimum_query_length} character(s).",
-            )
+            # A RequestValidationError rather than an HTTPException, so that a query rejected for
+            # its length is reported in the same shape -- and documented by the same schema -- as
+            # one rejected by FastAPI's own parameter validation. A caller iterating `detail` as a
+            # list of errors should not have to special-case this one rejection.
+            raise RequestValidationError([{
+                "type": "string_too_short",
+                "loc": ("query", "string"),
+                "msg": f"String should have at least {minimum_length} character(s) after "
+                       f"leading and trailing whitespace is stripped",
+                "input": string,
+                "ctx": {"min_length": minimum_length},
+            }])
         return []
 
     # For reasons I don't understand, we need to use backslash to escape characters (e.g. "\(") to remove the special
