@@ -1,6 +1,7 @@
 import logging
 
-from api.server import app, SOLR_MAX_CONCURRENT_LOOKUPS
+import api.server
+from api.server import app
 from fastapi.testclient import TestClient
 
 # Turn on debugging for tests.
@@ -330,13 +331,18 @@ def test_exact_bulk_lookup():
     assert results['no match term xyz'] == []
 
 
-def test_exact_bulk_lookup_beyond_concurrency_limit():
+def test_exact_bulk_lookup_beyond_concurrency_limit(monkeypatch):
     """
     bulk_lookup() runs its per-string lookups concurrently behind a semaphore, so exercise it with
-    more strings than SOLR_MAX_CONCURRENT_LOOKUPS allows in flight at once: every string must still
-    come back keyed to its own results, however the lookups interleave.
+    more strings than the semaphore allows in flight at once: every string must still come back
+    keyed to its own results, however the lookups interleave.
+
+    The limit is patched down rather than sending SOLR_MAX_CONCURRENT_LOOKUPS-worth of real strings,
+    because the default (100) is larger than the number of distinct labels in the test data. Patching
+    the module attribute works because bulk_lookup() builds its semaphore per request, at call time.
     """
     client = TestClient(app)
+    monkeypatch.setattr(api.server, "SOLR_MAX_CONCURRENT_LOOKUPS", 3)
 
     expected = {
         'parkinsonian disorder': 'HP:0001300',
@@ -353,7 +359,7 @@ def test_exact_bulk_lookup_beyond_concurrency_limit():
         'antiparkinson agent': 'CHEBI:48407',
         'BACE1 inhibitor': 'CHEBI:74925',
     }
-    assert len(expected) > SOLR_MAX_CONCURRENT_LOOKUPS, \
+    assert len(expected) > api.server.SOLR_MAX_CONCURRENT_LOOKUPS, \
         "This test is only meaningful with more strings than can be looked up concurrently."
 
     response = client.post("/bulk-lookup", json={

@@ -31,7 +31,12 @@ SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
 # bulk_lookup() runs its per-string lookups concurrently, and `strings` is unbounded, so without
 # this a large bulk request would open one socket per string -- enough to exhaust this process's
 # file descriptors and to stampede Solr. Raising this trades Solr load for bulk-lookup latency.
-SOLR_MAX_CONCURRENT_LOOKUPS = int(os.getenv("SOLR_MAX_CONCURRENT_LOOKUPS", "10"))
+#
+# Note that this bounds a *single* request, not the process: the Solr queries in flight across the
+# whole service is this multiplied by the number of concurrent /bulk-lookup requests being served.
+# 100 is set deliberately high on the assumption that Solr can take the strain, and should be
+# revisited once we know the real request rate -- see TranslatorSRI/babel-validation#107.
+SOLR_MAX_CONCURRENT_LOOKUPS = int(os.getenv("SOLR_MAX_CONCURRENT_LOOKUPS", "100"))
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)

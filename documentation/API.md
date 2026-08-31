@@ -232,7 +232,7 @@ POST `/bulk-lookup` with body:
 **Notes:**
 - This endpoint is useful for batch processing multiple queries at once, which can be more efficient than making multiple `/lookup` requests.
 - All results for a given string share the same filter and search parameters.
-- The individual lookups behind a single request are sent to Solr concurrently, up to a bounded number at a time (`SOLR_MAX_CONCURRENT_LOOKUPS`, default 10). Results are still returned keyed by the input string, so the response does not depend on the order in which they complete.
+- The individual lookups behind a single request are sent to Solr concurrently, up to a bounded number at a time (`SOLR_MAX_CONCURRENT_LOOKUPS`, default 100). Results are still returned keyed by the input string, so the response does not depend on the order in which they complete. Note that the bound applies per request, so the total number of queries this service has in flight against Solr is that limit multiplied by the number of bulk lookups being served at once.
 
 ### Exact matching
 
