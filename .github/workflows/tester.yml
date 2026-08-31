@@ -22,8 +22,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Run SOLR
-        run: docker run --name name_lookup -d -p 8983:8983 -t solr -DzkRun
+      - name: Run Solr (standalone)
+        run: docker run --name name_lookup -d -p 8983:8983 solr:9.10
+
+      - name: Create the name_lookup core from the checked-in configset
+        run: |
+          for _ in $(seq 60); do
+            curl -sf 'http://localhost:8983/solr/admin/cores?action=STATUS' > /dev/null && break
+            sleep 2
+          done
+          curl -sf 'http://localhost:8983/solr/admin/cores?action=STATUS' > /dev/null \
+            || { echo "Solr did not come up:"; docker logs name_lookup; exit 1; }
+          docker cp data-loading/configsets/name_lookup name_lookup:/tmp/name_lookup
+          docker exec name_lookup solr create -c name_lookup -d /tmp/name_lookup
 
       - name: Install dependencies
         run: |
@@ -38,3 +49,62 @@ jobs:
       - name: Run the tests
         run: |
           python -m pytest tests/
+
+      # The loader's guard is what stands between us and a silently half-loaded
+      # 130 GB index, so check that a bad file actually stops it. LOAD_APPEND=1
+      # because the core is loaded by now, and without it the loader would refuse
+      # for that reason instead -- the test would pass without testing anything.
+      - name: The loader must abort on a file that does not load
+        run: |
+          echo 'this is not json' > /tmp/malformed.json
+          if LOAD_APPEND=1 ./data-loading/setup-and-load-solr.sh /tmp/malformed.json; then
+            echo "Expected the loader to fail on a malformed file, but it succeeded."
+            exit 1
+          fi
+          echo "Loader aborted as expected."
+
+      # The other half of that guard: loading is additive and assigns fresh UUIDs, so
+      # a re-run over the same files doubles the index and the document-count check
+      # cannot see it (the delta is still exactly right). Refusing a non-empty core is
+      # the only thing that catches it.
+      - name: The loader must refuse a core that already has documents
+        run: |
+          if ./data-loading/setup-and-load-solr.sh tests/data/test-synonyms.json; then
+            echo "Expected the loader to refuse a non-empty core, but it loaded again."
+            exit 1
+          fi
+          echo "Loader refused the non-empty core as expected."
+
+      # The backup is the actual product of data-loading/, so check that a core can be
+      # tarred up, dropped into a fresh Solr, and served without any restore-time setup.
+      #
+      # The tar flags are the ones the Makefile uses, and the restore deliberately does
+      # NOT chown afterwards: the loading image runs as uid 1000 and the serving image
+      # as 8983, so if the tarball did not stamp the ownership the restored core would
+      # be unwritable and Solr would fail to take its write lock. chown-ing here would
+      # hide exactly the bug this is meant to catch. The chown to 1000 below stands in
+      # for the loading image, so the source ownership is wrong before we start.
+      - name: Verify the backup roundtrip (tar the core, restore it into a fresh Solr)
+        run: |
+          docker exec -u root name_lookup chown -R 1000:1000 /var/solr/data/name_lookup
+          docker exec -u root name_lookup tar -C /var/solr/data \
+            --numeric-owner --owner=8983 --group=8983 \
+            --exclude='name_lookup/data/tlog' \
+            -cf - name_lookup > snapshot.backup.tar
+          docker run --name name_lookup_restored -d -p 8984:8983 solr:9.10
+          for _ in $(seq 60); do
+            curl -sf 'http://localhost:8984/solr/admin/cores?action=STATUS' > /dev/null && break
+            sleep 2
+          done
+          docker cp snapshot.backup.tar name_lookup_restored:/tmp/snapshot.backup.tar
+          docker exec -u root name_lookup_restored tar -C /var/solr/data --numeric-owner -xf /tmp/snapshot.backup.tar
+          docker restart name_lookup_restored
+          for _ in $(seq 60); do
+            curl -sf 'http://localhost:8984/solr/name_lookup/admin/ping' > /dev/null && break
+            sleep 2
+          done
+          count=$(curl -sf 'http://localhost:8984/solr/name_lookup/query?q=*:*&rows=0' \
+            | grep -oE '"numFound":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+')
+          expected=$(grep -c '[^[:space:]]' tests/data/test-synonyms.json)
+          echo "Restored core reports ${count:-0} documents; expected ${expected}."
+          [ "${count:-0}" = "${expected}" ]

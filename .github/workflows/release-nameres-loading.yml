@@ -17,9 +17,6 @@ jobs:
         steps:
             - name: Check out the repo
               uses: actions/checkout@v2
-            - name: Get the version
-              id: get_version
-              run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
             - name: Extract metadata (tags, labels) for Docker
               id: meta
               uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
@@ -44,3 +41,16 @@ jobs:
                   tags: ${{ steps.meta.outputs.tags }}
                   labels: ${{ steps.meta.outputs.labels }}
                   build-args: BRANCH_NAME=${{ github.event.release.target_commitish }}
+                  # Without a cache every run rebuilds the whole image: apt upgrade,
+                  # seven apt installs and a ~250MB Solr tarball fetched through an
+                  # Apache mirror, which is why a build takes ~25 minutes. Layers
+                  # before the first change now come from the GitHub Actions cache.
+                  # mode=max keeps intermediate layers too, so a change late in the
+                  # Dockerfile (the COPYs) does not re-download Solr.
+                  #
+                  # The trade is that `apt upgrade` is cached as well, so an image
+                  # built from an unchanged Dockerfile stops picking up new Debian
+                  # packages. That is the right way round here: this is short-lived
+                  # build tooling, and any Dockerfile edit invalidates the cache.
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
