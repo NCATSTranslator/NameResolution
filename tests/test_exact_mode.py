@@ -191,8 +191,9 @@ def test_exact_combines_with_the_other_filters():
     base = {'string': 'parkinsonian disorder', 'exact': 'label', 'limit': 100}
     assert 'HP:0001300' in [r['curie'] for r in client.get("/lookup", params=base).json()]
 
-    # HP:0001300 is a PhenotypicFeature, so filtering to it keeps the result...
-    response = client.get("/lookup", params={**base, 'biolink_type': 'biolink:PhenotypicFeature'})
+    # HP:0001300 is typed Disease -- not PhenotypicFeature, despite the HP prefix -- so filtering
+    # to that type keeps the result...
+    response = client.get("/lookup", params={**base, 'biolink_type': 'biolink:Disease'})
     assert 'HP:0001300' in [r['curie'] for r in response.json()]
 
     # ...and filtering to an unrelated type removes it without disturbing the exact match itself.
