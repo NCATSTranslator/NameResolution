@@ -348,8 +348,9 @@ async def lookup_curies_get(
         )] = 'none',
         exact: Annotated[Optional[ExactMatchMode], Query(
             description="Exact-match mode: 'label' matches the preferred name only, "
-                        "'synonyms' matches any synonym, 'any' matches either. "
-                        "Omit for the default fuzzy search."
+                        "'synonyms' matches any synonym, 'any' matches either. In every mode the "
+                        "entire string must match, case-insensitively. "
+                        "Omit for the default tokenized search."
         )] = None,
 ) -> List[LookupResult]:
     """
@@ -417,8 +418,9 @@ async def lookup_curies_post(
         )] = 'none',
         exact: Annotated[Optional[ExactMatchMode], Query(
             description="Exact-match mode: 'label' matches the preferred name only, "
-                        "'synonyms' matches any synonym, 'any' matches either. "
-                        "Omit for the default fuzzy search."
+                        "'synonyms' matches any synonym, 'any' matches either. In every mode the "
+                        "entire string must match, case-insensitively. "
+                        "Omit for the default tokenized search."
         )] = None,
 ) -> List[LookupResult]:
     """
@@ -550,6 +552,8 @@ async def lookup(string: str,
 
     if exact:
         # Exact mode: bypass eDisMax entirely and use a filter query against the *_exactish fields.
+        # Unlike the default query below, which matches the string's tokens in any order, this requires
+        # the whole string to match (case-insensitively -- see the exactish fieldType in the schema).
         # Filter queries are cached by Solr, making repeated lookups of the same term very fast.
         string_lc_escaped = string_lc.replace('\\', '\\\\').replace('"', '\\"')
         if exact == ExactMatchMode.label:
@@ -741,8 +745,9 @@ class NameResQuery(BaseModel):
     exact: Optional[ExactMatchMode] = Field(
         None,
         description="Exact-match mode: 'label' matches the preferred name only, "
-                    "'synonyms' matches any synonym, 'any' matches either. "
-                    "Omit (or null) for the default fuzzy search.",
+                    "'synonyms' matches any synonym, 'any' matches either. In every mode the "
+                    "entire string must match, case-insensitively. "
+                    "Omit (or null) for the default tokenized search.",
     )
 
 

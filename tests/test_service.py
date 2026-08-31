@@ -373,3 +373,28 @@ def test_exact_bulk_lookup_beyond_concurrency_limit(monkeypatch):
     for string, curie in expected.items():
         assert curie in [r['curie'] for r in results[string]], \
             f"Expected {curie} in the results for {string!r}, got {results[string]}"
+
+
+# The default (non-exact) search is tokenized, not fuzzy. These two tests pin down that distinction,
+# since documentation/API.md makes a promise about it that is easy to break by changing the query or
+# the schema's field types: word order is not required, but misspellings are not tolerated either.
+
+def test_default_search_ignores_word_order():
+    client = TestClient(app)
+    # MONDO:0005180 is "Parkinson disease". The tokens may arrive in any order.
+    response = client.get("/lookup", params={'string': 'disease Parkinson', 'limit': 100})
+    curies = [r['curie'] for r in response.json()]
+    assert 'MONDO:0005180' in curies
+
+
+def test_default_search_does_not_tolerate_misspellings():
+    client = TestClient(app)
+    # No document contains the token "parkinsen", and there is no edit-distance matching to bridge
+    # the gap to "parkinson", so this must find nothing at all.
+    response = client.get("/lookup", params={'string': 'parkinsen', 'limit': 100})
+    assert response.json() == []
+
+    # The same string with the typo corrected does match, so the miss above is the spelling and not
+    # some other property of the query.
+    response = client.get("/lookup", params={'string': 'parkinson', 'limit': 100})
+    assert len(response.json()) > 0

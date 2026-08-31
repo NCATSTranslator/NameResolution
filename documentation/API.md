@@ -110,6 +110,8 @@ We are currently working on supporting
 
 The search endpoints allow you to search for concepts by a fragment of a name or synonym. By default these endpoints use Solr's extended Dismax query parser to search for matches across preferred names and synonyms, with support for highlighting, filtering, pagination, and debugging. Setting the `exact` parameter switches them to whole-string exact matching instead (see [Exact matching](#exact-matching)).
 
+The default search is *tokenized*, not *fuzzy*: your search string is broken into tokens, and a concept matches if its name or synonyms contain those tokens, in any order and not necessarily adjacent. Word order and adjacency are rewarded with a higher score rather than required, which is why `disease Parkinson` still finds `Parkinson disease`. What the default search does **not** do is tolerate misspellings: there is no edit-distance matching, so `parkinsen` finds nothing. (Solr's fuzzy `~` operator is escaped out of the query string along with the other special characters, so it cannot be requested either.) The one exception is `autocomplete=true`, which treats the *final* token as a prefix so that a half-typed word still matches.
+
 ### `/lookup`
 
 Search for cliques by a fragment of a name or synonym.
@@ -128,7 +130,7 @@ Search for cliques by a fragment of a name or synonym.
 - `exclude_prefixes` (optional, string): Pipe-separated, case-sensitive list of CURIE prefixes to exclude (e.g., `UMLS|EFO`). Results with matching prefixes will be filtered out.
 - `only_taxa` (optional, string): Pipe-separated, case-sensitive list of taxa to filter to (e.g., `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`). Results without a specified taxon or with a matching taxon will be included.
 - `debug` (optional, string, one of: `none`, `query`, `timing`, `results`, `all`, default: `none`): Return debugging information from the underlying Solr query. See [Solr debug documentation](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter) for details.
-- `exact` (optional, string, one of: `label`, `synonyms`, `any`): Match the search string exactly rather than fuzzily. See [Exact matching](#exact-matching) below. Omit for the default fuzzy search.
+- `exact` (optional, string, one of: `label`, `synonyms`, `any`): Require the whole search string to match, instead of matching its tokens individually. See [Exact matching](#exact-matching) below. Omit for the default tokenized search.
 
 **Returns:** A list of `LookupResult` objects, each containing:
 - `curie`: The CURIE of the concept.
@@ -236,18 +238,18 @@ POST `/bulk-lookup` with body:
 
 ### Exact matching
 
-Both `/lookup` and `/bulk-lookup` accept an `exact` parameter, which replaces the default fuzzy eDisMax search with whole-string matching against the `preferred_name_exactish` and `names_exactish` fields. These fields are indexed with a keyword tokenizer and a lowercase filter, so the *entire* string must match, but matching is case-insensitive. A search for `parkinson` will not match the label `parkinsonian disorder`, whereas `Parkinsonian Disorder` will.
+Both `/lookup` and `/bulk-lookup` accept an `exact` parameter, which replaces the default tokenized eDisMax search with whole-string matching against the `preferred_name_exactish` and `names_exactish` fields. These fields are indexed with a keyword tokenizer and a lowercase filter, so the *entire* string must match, but matching is case-insensitive. A search for `parkinson` will not match the label `parkinsonian disorder`, whereas `Parkinsonian Disorder` will.
 
 | `exact` | Matches against |
 | --- | --- |
 | `label` | The preferred name only (`preferred_name_exactish`). |
 | `synonyms` | The synonyms only (`names_exactish`). |
 | `any` | Either the preferred name or a synonym. |
-| *(omitted)* | Nothing changes: the usual fuzzy eDisMax search is used. |
+| *(omitted)* | Nothing changes: the usual tokenized eDisMax search is used. |
 
 Note that a concept's preferred name is not necessarily one of its synonyms, so `label` and `synonyms` can genuinely disagree. For example, HP:0001300 has the preferred name `parkinsonian disorder` and the single synonym `Parkinsonian disease`; searching for `parkinsonian disorder` with `exact=label` finds it, but with `exact=synonyms` it does not.
 
-Exact matching is implemented as a Solr filter query, which Solr caches, so repeated exact lookups of the same string are considerably cheaper than the equivalent fuzzy search. It is intended for callers such as named entity recognition pipelines that need to resolve large numbers of exact strings.
+Exact matching is implemented as a Solr filter query, which Solr caches, so repeated exact lookups of the same string are considerably cheaper than the equivalent tokenized search. It is intended for callers such as named entity recognition pipelines that need to resolve large numbers of exact strings.
 
 Because there is no relevance score to rank by in exact mode, results are sorted by `clique_identifier_count` (descending) and then CURIE suffix (ascending), rather than by score. The `score` field is still present in each result, but it carries no ranking information.
 
