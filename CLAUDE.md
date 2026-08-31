@@ -59,9 +59,9 @@ pip install -r requirements.txt
 4. Results are scored, normalized, and returned as JSON
 
 ### Key Files
-- `api/server.py` - Core FastAPI application (~717 lines): all endpoints, Pydantic models, Solr query construction, environment config
+- `api/server.py` - Core FastAPI application: all endpoints, Pydantic models, Solr query construction, environment config
 - `api/apidocs.py` - Custom OpenAPI schema construction
-- `api/resources/.openapi.yml` - OpenAPI 3.0.2 spec with service metadata
+- `api/resources/openapi.yml` - OpenAPI 3.0.2 spec with service metadata
 - `main.py` / `main.sh` - WSGI/ASGI entry points (port 2433)
 - `tests/test_service.py` - Integration tests using FastAPI `TestClient`
 - `tests/test_exact_mode.py` - Integration tests for the `exact` parameter
