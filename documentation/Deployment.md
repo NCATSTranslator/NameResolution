@@ -105,6 +105,8 @@ NameRes can be configured by setting environmental variables:
 
 * `SOLR_HOST` and `SOLR_PORT`: Hostname and port for the Solr database containing NameRes information.
 * `SOLR_CORE`: The Solr core to query (defaults to `name_lookup`).
+* `SOLR_MAX_CONCURRENT_LOOKUPS`: The greatest number of Solr queries a single `/bulk-lookup` request may have in flight at once (defaults to `100`, and is clamped to at least `1`). The bound is per request, so the queries this service has in flight against Solr is this multiplied by the number of bulk lookups being served at once.
+* `SOLR_TIMEOUT_SECONDS`: How long to wait for any one Solr query before giving up (defaults to `60`). Set it to `0` to wait indefinitely.
 * `SERVER_NAME`: The name of this server (defaults to `infores:sri-name-resolver`)
 * `SERVER_ROOT`: The server root (defaults to `/`)
 * `MATURITY_VALUE`: How mature is this NameRes (defaults to `maturity`, e.g. `development`)

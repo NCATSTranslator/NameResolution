@@ -59,15 +59,17 @@ pip install -r requirements.txt
 4. Results are scored, normalized, and returned as JSON
 
 ### Key Files
-- `api/server.py` - Core FastAPI application (~717 lines): all endpoints, Pydantic models, Solr query construction, environment config
+- `api/server.py` - Core FastAPI application: all endpoints, Pydantic models, Solr query construction, environment config
 - `api/apidocs.py` - Custom OpenAPI schema construction
-- `api/resources/.openapi.yml` - OpenAPI 3.0.2 spec with service metadata
+- `api/resources/openapi.yml` - OpenAPI 3.0.2 spec with service metadata
 - `main.py` / `main.sh` - WSGI/ASGI entry points (port 2433)
 - `tests/test_service.py` - Integration tests using FastAPI `TestClient`
+- `tests/test_exact_mode.py` - Integration tests for the `exact` parameter
 - `tests/data/test-synonyms.json` - Test dataset for Solr
 
 ### Environment Variables
 - `SOLR_HOST` / `SOLR_PORT` - Solr connection (default: `localhost:8983`)
+- `SOLR_MAX_CONCURRENT_LOOKUPS` / `SOLR_TIMEOUT_SECONDS` - Bulk-lookup fan-out bound and Solr query timeout (see `documentation/Deployment.md`)
 - `LOGLEVEL` - Logging level
 - `SERVER_ROOT` - API root path prefix
 - `MATURITY_VALUE` / `LOCATION_VALUE` - TRAPI metadata fields
@@ -88,6 +90,12 @@ Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and b
 - **Persistent Solr 9.10 (standalone)** - Data in volume-mounted `./data/solr`
 - **Data loading** - Separate pipeline in `data-loading/` (Makefile-driven, also has Kubernetes configs)
 - **CI/CD** - GitHub Actions: runs tests on push, publishes Docker image to GitHub Packages on release
+
+## Gotchas
+
+- **The default search is *tokenized*, not *fuzzy*.** It matches the query's tokens in any order (order and adjacency are rewarded by the phrase-field boost, not required), and `autocomplete=true` makes the final token a prefix. There is no edit-distance matching, and `lookup()` escapes Solr's `~` out of the query so callers cannot request it. Do not describe it as "fuzzy" in docs or parameter descriptions -- that promises typo tolerance the service has never had. `tests/test_service.py` pins both halves of this.
+- **Solr's `filterCache` is bounded by entry count (512), not by memory.** It earns its keep on shared, reusable filters (`types:`, `taxa:`, `curie:`). A filter whose value varies per query -- as exact mode's does -- must be marked `{!cache=false}`, or one bulk request evicts the whole cache and slows the ordinary search path down as collateral damage. See the comment in `lookup()`.
+- **Query-side string normalization must not be applied to exact matching.** The `*_exactish` fields are a KeywordTokenizer plus a LowerCaseFilter and fold nothing else, so the smart-quote rewrite (and anything like it) would search for a string the caller never typed. The default path is unaffected because StandardTokenizer discards the punctuation anyway.
 
 ## Documentation
 - `documentation/API.md` - Endpoint reference

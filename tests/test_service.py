@@ -1,5 +1,6 @@
 import logging
 
+import api.server
 from api.server import app
 from fastapi.testclient import TestClient
 
@@ -14,14 +15,12 @@ def test_simple_check():
     #There are more than 10, but it should cut off at 10 if we don't give it a max?
     assert len(syns) == 10
 
-
 def test_empty():
     """ Checks that calling NameRes without an input string return an empty list. """
     client = TestClient(app)
     response = client.get("/lookup", params={'string':''})
     syns = response.json()
     assert len(syns) == 0
-
 
 def test_limit():
     client = TestClient(app)
@@ -33,7 +32,6 @@ def test_limit():
     response = client.post("/lookup", params=params2)
     syns = response.json()
     assert len(syns) == 30
-
 
 def test_type_subsetting():
     client = TestClient(app)
@@ -90,7 +88,6 @@ def test_structure():
     #do we get a preferred name and type?
     assert syns[0]["label"] == 'BACE1 inhibitor'
     assert syns[0]["types"] == ["biolink:NamedThing"]
-
 
 def test_autocomplete():
     client = TestClient(app)
@@ -158,7 +155,6 @@ def test_windows_smartquotes():
     assert syns[0]['label'] == 'Alzheimer disease'
     assert syns[0]['types'][0] == 'biolink:Disease'
 
-
 def test_bulk_lookup():
     client = TestClient(app)
     params = {
@@ -189,7 +185,6 @@ def test_bulk_lookup():
     assert len(results['Parkinson']) == 33
     assert results['Parkinson'][0]['curie'] == 'MONDO:0005180'
     assert results['Parkinson'][0]['label'] == "Parkinson disease"
-
 
 def test_synonyms():
     """
@@ -260,3 +255,99 @@ def test_only_taxa_queries():
     results_ftd_disease_with_only_taxon = response.json()
     assert len(results_ftd_disease_with_only_taxon) == 1
     assert results_ftd_disease_with_only_taxon[0]['curie'] == 'MONDO:0010857'
+
+def test_bulk_lookup_beyond_concurrency_limit(monkeypatch):
+    """
+    bulk_lookup() runs its per-string lookups concurrently behind a semaphore, so exercise it with
+    more strings than the semaphore allows in flight at once: every string must still come back
+    keyed to its own results, however the lookups interleave. This is a property of bulk lookup
+    rather than of exact matching; exact=label is used only to make each string's result definite.
+
+    The limit is patched down rather than sending SOLR_MAX_CONCURRENT_LOOKUPS-worth of real strings,
+    because the default (100) is larger than the number of distinct labels in the test data. Patching
+    the module attribute works because bulk_lookup() builds its semaphore per request, at call time.
+    """
+    client = TestClient(app)
+    monkeypatch.setattr(api.server, "SOLR_MAX_CONCURRENT_LOOKUPS", 3)
+
+    expected = {
+        'parkinsonian disorder': 'HP:0001300',
+        'Resting tremor': 'HP:0002322',
+        'juvenile-onset Parkinson disease': 'MONDO:0000828',
+        'postencephalitic Parkinson disease': 'MONDO:0001945',
+        'Parkinson disease': 'MONDO:0005180',
+        'secondary Parkinson disease': 'MONDO:0006966',
+        'Alzheimer disease type 1': 'MONDO:0007088',
+        'Alzheimer disease 2': 'MONDO:0007089',
+        'Lewy body dementia': 'MONDO:0007488',
+        'dystonia 5': 'MONDO:0007495',
+        'dystonia 12': 'MONDO:0007496',
+        'antiparkinson agent': 'CHEBI:48407',
+        'BACE1 inhibitor': 'CHEBI:74925',
+    }
+    assert len(expected) > api.server.SOLR_MAX_CONCURRENT_LOOKUPS, \
+        "This test is only meaningful with more strings than can be looked up concurrently."
+
+    response = client.post("/bulk-lookup", json={
+        'strings': list(expected.keys()),
+        'exact': 'label',
+        'limit': 100,
+    })
+    results = response.json()
+
+    assert set(results.keys()) == set(expected.keys())
+    for string, curie in expected.items():
+        assert curie in [r['curie'] for r in results[string]], \
+            f"Expected {curie} in the results for {string!r}, got {results[string]}"
+
+
+# The default (non-exact) search is tokenized, not fuzzy. These two tests pin down that distinction,
+# since documentation/API.md makes a promise about it that is easy to break by changing the query or
+# the schema's field types: word order is not required, but misspellings are not tolerated either.
+
+def test_default_search_ignores_word_order():
+    client = TestClient(app)
+    # MONDO:0005180 is "Parkinson disease". The tokens may arrive in any order.
+    response = client.get("/lookup", params={'string': 'disease Parkinson', 'limit': 100})
+    curies = [r['curie'] for r in response.json()]
+    assert 'MONDO:0005180' in curies
+
+def test_default_search_does_not_tolerate_misspellings():
+    client = TestClient(app)
+    # No document contains the token "parkinsen", and there is no edit-distance matching to bridge
+    # the gap to "parkinson", so this must find nothing at all.
+    response = client.get("/lookup", params={'string': 'parkinsen', 'limit': 100})
+    assert response.json() == []
+
+    # The same string with the typo corrected does match, so the miss above is the spelling and not
+    # some other property of the query.
+    response = client.get("/lookup", params={'string': 'parkinson', 'limit': 100})
+    assert len(response.json()) > 0
+
+def test_solr_settings_are_sane():
+    # A concurrency limit of 0 would make every bulk lookup wait on a semaphore nobody can acquire.
+    assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS >= 1
+    # A stalled Solr connection must not be able to pin a bulk request forever by default.
+    assert api.server.SOLR_TIMEOUT is None or api.server.SOLR_TIMEOUT > 0
+
+
+def test_concurrency_limit_is_clamped_to_at_least_one(monkeypatch):
+    """
+    SOLR_MAX_CONCURRENT_LOOKUPS=0 would build a semaphore nobody can ever acquire, hanging every
+    bulk lookup with no error and no log line. The clamp runs at import, so this has to reload the
+    module to exercise it.
+    """
+    import importlib
+
+    try:
+        monkeypatch.setenv("SOLR_MAX_CONCURRENT_LOOKUPS", "0")
+        importlib.reload(api.server)
+        assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS == 1
+
+        monkeypatch.setenv("SOLR_MAX_CONCURRENT_LOOKUPS", "25")
+        importlib.reload(api.server)
+        assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS == 25
+    finally:
+        # Restore the module for whatever runs next, since reload mutates it in place.
+        monkeypatch.delenv("SOLR_MAX_CONCURRENT_LOOKUPS", raising=False)
+        importlib.reload(api.server)

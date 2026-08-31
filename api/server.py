@@ -3,6 +3,8 @@ Name Resolver (Name Lookup, NameRes) API Endpoints
 
 Queries are mostly sent to the underlying the NameRes Solr instance.
 """
+import asyncio
+import html
 import json
 import logging
 import warnings
@@ -12,7 +14,7 @@ import re
 from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
 
-from fastapi import Body, FastAPI, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse
 import httpx
 from pydantic import BaseModel, Field
@@ -25,6 +27,30 @@ SOLR_PORT = os.getenv("SOLR_PORT", "8983")
 # The Solr core to query. In standalone mode this is the core name; the cloud-mode
 # backups we used to ship called it name_lookup_shard1_replica_n1 instead (see status()).
 SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
+
+# The maximum number of Solr queries a single /bulk-lookup request may have in flight at once.
+# bulk_lookup() runs its per-string lookups concurrently, and `strings` is unbounded, so without
+# this a large bulk request would open one socket per string -- enough to exhaust this process's
+# file descriptors and to stampede Solr. Raising this trades Solr load for bulk-lookup latency.
+#
+# Note that this bounds a *single* request, not the process: the Solr queries in flight across the
+# whole service is this multiplied by the number of concurrent /bulk-lookup requests being served.
+# 100 is set deliberately high on the assumption that Solr can take the strain, and should be
+# revisited once we know the real request rate -- see TranslatorSRI/babel-validation#107.
+#
+# Clamped to at least 1: a value of 0 would produce a semaphore nobody can acquire, wedging every
+# /bulk-lookup request forever with no error and no log line, which is a miserable thing to debug
+# for what is usually a typo in a deployment's environment.
+SOLR_MAX_CONCURRENT_LOOKUPS = max(1, int(os.getenv("SOLR_MAX_CONCURRENT_LOOKUPS", "100")))
+
+# How long to wait for Solr before giving up on a single query, in seconds.
+#
+# This matters more than it used to. When bulk_lookup() ran its lookups sequentially, a stalled
+# Solr connection held up one query; now that they run concurrently, one stalled connection can
+# pin an otherwise-complete bulk request indefinitely while holding a semaphore slot. Set it to
+# 0 to restore the previous behaviour of waiting forever.
+SOLR_TIMEOUT_SECONDS = float(os.getenv("SOLR_TIMEOUT_SECONDS", "60"))
+SOLR_TIMEOUT = SOLR_TIMEOUT_SECONDS if SOLR_TIMEOUT_SECONDS > 0 else None
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
@@ -61,7 +87,7 @@ async def status_get() -> Dict:
 async def status() -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
         response = await client.get(query_url, params={
             'action': 'STATUS'
         })
@@ -241,7 +267,7 @@ async def name_lookup(curies) -> Dict[str, Dict]:
         "query": curie_filter,
         "limit": 1000000,
     }
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
         response = await client.post(query, json=params)
     response.raise_for_status()
     response_json = response.json()
@@ -256,6 +282,13 @@ async def name_lookup(curies) -> Dict[str, Dict]:
     logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)}: took {(time_end - time_start)/1_000_000:.2f}ms")
 
     return output
+
+class ExactMatchMode(str, Enum):
+    """Controls exact-match behaviour in lookup queries."""
+    label    = "label"     # match against preferred_name_exactish only
+    synonyms = "synonyms"  # match against names_exactish only
+    any      = "any"       # match against either
+
 
 class LookupResult(BaseModel):
     curie:str
@@ -326,12 +359,18 @@ async def lookup_curies_get(
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
             description="Provide debugging information on the Solr query as described in <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameters</a>."
-        )] = 'none'
+        )] = 'none',
+        exact: Annotated[Optional[ExactMatchMode], Query(
+            description="Exact-match mode: 'label' matches the preferred name only, "
+                        "'synonyms' matches any synonym, 'any' matches either. In every mode the "
+                        "entire string must match, case-insensitively. "
+                        "Omit for the default tokenized search."
+        )] = None,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, exact)
 
 
 @app.post("/lookup",
@@ -390,12 +429,18 @@ async def lookup_curies_post(
         )] = None,
         debug: Annotated[Union[DebugOptions, None], Query(
             description="Provide debugging information on the Solr query as per <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameter</a>."
-        )] = 'none'
+        )] = 'none',
+        exact: Annotated[Optional[ExactMatchMode], Query(
+            description="Exact-match mode: 'label' matches the preferred name only, "
+                        "'synonyms' matches any synonym, 'any' matches either. In every mode the "
+                        "entire string must match, case-insensitively. "
+                        "Omit for the default tokenized search."
+        )] = None,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, exact)
 
 
 async def lookup(string: str,
@@ -408,6 +453,7 @@ async def lookup(string: str,
            exclude_prefixes: str = "",
            only_taxa: str = "",
            debug: DebugOptions = 'none',
+           exact: Optional[ExactMatchMode] = None,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
@@ -422,6 +468,17 @@ async def lookup(string: str,
 
     time_start = time.time_ns()
 
+    # autocomplete asks us to treat the last word as a prefix; exact asks us to match the whole
+    # string and nothing else. There is no sensible reading of the two together, so rather than
+    # silently ignoring one of them, say so.
+    if exact and autocomplete:
+        raise HTTPException(
+            status_code=400,
+            detail="autocomplete=true cannot be combined with exact matching: autocomplete treats "
+                   "the final word as an incomplete prefix, while exact requires the entire string "
+                   "to match. Please use one or the other.",
+        )
+
     # First, we strip and lowercase the query since all our indexes are case-insensitive.
     string_lc = string.strip().lower()
 
@@ -432,7 +489,15 @@ async def lookup(string: str,
     # But the only issue we've actually run into so far has been the Windows smart
     # quote (https://github.com/NCATSTranslator/NameResolution/issues/176), so for now
     # let's detect and replace just those characters.
-    string_lc = re.sub(r"[“”]", '"', re.sub(r"[‘’]", "'", string_lc))
+    #
+    # Deliberately not done in exact mode. The *_exactish fields are a KeywordTokenizer and a
+    # LowerCaseFilter, with no punctuation folding of their own, so the indexed value keeps
+    # whichever quote characters Babel emitted. Rewriting the query's quotes would therefore make
+    # exact mode search for a string the caller did not type, and would put any label containing a
+    # typographic quote permanently out of reach. The default search is unaffected either way,
+    # because StandardTokenizer discards the punctuation at index and query time alike.
+    if not exact:
+        string_lc = re.sub(r"[“”]", '"', re.sub(r"[‘’]", "'", string_lc))
 
     # Do we have a search string at all?
     if string_lc == "":
@@ -500,7 +565,9 @@ async def lookup(string: str,
 
     # Turn on highlighting if requested.
     inner_params = {}
-    if highlighting:
+    # In exact mode there is no scored query for Solr to highlight against (see below), so the
+    # highlighting is synthesized from the returned documents instead of asked for here.
+    if highlighting and not exact:
         inner_params.update({
             # Highlighting
             "hl": "true",
@@ -518,37 +585,72 @@ async def lookup(string: str,
         # Rather than returning the explain as a string, return it as structured JSON.
         inner_params['debug.explain.structured'] = 'true'
 
-    params = {
-        "query": {
-            "edismax": {
-                "query": query,
-                # qf = query fields, i.e. how should we boost these fields if they contain the same fields as the input.
-                # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#qf-query-fields-parameter
-                "qf": "preferred_name_exactish^250 names_exactish^100 preferred_name^25 names^10",
-                # pf = phrase fields, i.e. how should we boost these fields if they contain the entire search phrase.
-                # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
-                "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^30 names^20",
-                # Boosts
-                "bq": [],
-                "boost": [
-                    # The boost is multiplied with score -- calculating the log() reduces how quickly this increases
-                    # the score for increasing clique identifier counts.
-                    "log(sum(clique_identifier_count, 1))"
-                ],
+    if exact:
+        # Exact mode: bypass eDisMax entirely and match with a filter query against the *_exactish
+        # fields. Unlike the default query below, which matches the string's tokens in any order,
+        # this requires the whole string to match (case-insensitively -- see the exactish fieldType
+        # in the schema). A filter query is the right shape for that: there is nothing to score.
+        string_lc_escaped = string_lc.replace('\\', '\\\\').replace('"', '\\"')
+        if exact == ExactMatchMode.label:
+            exact_clause = f'preferred_name_exactish:"{string_lc_escaped}"'
+        elif exact == ExactMatchMode.synonyms:
+            exact_clause = f'names_exactish:"{string_lc_escaped}"'
+        else:  # ExactMatchMode.any
+            exact_clause = (
+                f'(preferred_name_exactish:"{string_lc_escaped}" OR names_exactish:"{string_lc_escaped}")'
+            )
+
+        # Marked uncached deliberately. Solr's filterCache is an entry count, not a size in bytes
+        # (solrconfig.xml sets 512 entries), and the entries it holds are shared, reusable filters
+        # like types: and taxa: that nearly every search benefits from. This clause is the opposite
+        # of that: one distinct entry per distinct search string. The workload exact mode exists to
+        # serve -- an NER pipeline resolving large numbers of *different* strings -- would therefore
+        # evict the whole cache on every request and slow down the ordinary search path as
+        # collateral damage, in exchange for a hit rate near zero on its own entries. Repeated
+        # identical exact lookups are still served from the queryResultCache, which is bounded by
+        # RAM rather than by entry count and caches the whole (query, filters, sort) result.
+        filters.append(f'{{!cache=false}}{exact_clause}')
+        params = {
+            "query": "*:*",
+            "filter": filters,
+            "sort": "clique_identifier_count DESC, curie_suffix ASC",
+            "limit": limit,
+            "offset": offset,
+            "fields": "*, score",
+            "params": inner_params,
+        }
+    else:
+        params = {
+            "query": {
+                "edismax": {
+                    "query": query,
+                    # qf = query fields, i.e. how should we boost these fields if they contain the same fields as the input.
+                    # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#qf-query-fields-parameter
+                    "qf": "preferred_name_exactish^250 names_exactish^100 preferred_name^25 names^10",
+                    # pf = phrase fields, i.e. how should we boost these fields if they contain the entire search phrase.
+                    # https://solr.apache.org/guide/solr/latest/query-guide/dismax-query-parser.html#pf-phrase-fields-parameter
+                    "pf": "preferred_name_exactish^300 names_exactish^200 preferred_name^30 names^20",
+                    # Boosts
+                    "bq": [],
+                    "boost": [
+                        # The boost is multiplied with score -- calculating the log() reduces how quickly this increases
+                        # the score for increasing clique identifier counts.
+                        "log(sum(clique_identifier_count, 1))"
+                    ],
+                },
             },
-        },
-        "sort": "score DESC, clique_identifier_count DESC, curie_suffix ASC",
-        "limit": limit,
-        "offset": offset,
-        "filter": filters,
-        "fields": "*, score",
-        "params": inner_params,
-    }
+            "sort": "score DESC, clique_identifier_count DESC, curie_suffix ASC",
+            "limit": limit,
+            "offset": offset,
+            "filter": filters,
+            "fields": "*, score",
+            "params": inner_params,
+        }
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
     time_solr_start = time.time_ns()
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/{SOLR_CORE}/select"
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
         logger.error("Solr REST error: %s", response.text)
@@ -571,7 +673,29 @@ async def lookup(string: str,
         preferred_matches = []
         synonym_matches = []
 
-        if doc['id'] in highlighting_response:
+        if exact and highlighting:
+            # Solr did not highlight anything for us: exact mode matches with a filter query
+            # against fields that are not stored, so there is no scored query and nothing for the
+            # highlighter to mark up. Synthesize the same shape from the documents instead, so that
+            # a caller reading `highlighting` does not have to care which mode produced it.
+            #
+            # Every match in exact mode is a whole-value match, so the "highlighted" form of a
+            # matching name is simply the entire name wrapped in the same tags Solr would have
+            # used. Escape it first, since we ask Solr for hl.encoder=html in the default path.
+            def mark(value: str) -> str:
+                return f"<strong>{html.escape(value)}</strong>"
+
+            if exact in {ExactMatchMode.label, ExactMatchMode.any}:
+                preferred_name = doc.get("preferred_name", "")
+                if preferred_name.lower() == string_lc:
+                    preferred_matches.append(mark(preferred_name))
+
+            if exact in {ExactMatchMode.synonyms, ExactMatchMode.any}:
+                synonym_matches.extend(
+                    mark(name) for name in doc.get("names", []) if name.lower() == string_lc
+                )
+
+        elif doc['id'] in highlighting_response:
             matches = highlighting_response[doc['id']]
 
             # We order exactish matches before token matches.
@@ -619,7 +743,7 @@ async def lookup(string: str,
 
     time_end = time.time_ns()
     logger.info(f"Lookup query to Solr for {json.dumps(string)} " +
-                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}): "
+                 f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}, exact={exact}): "
                  f"took {(time_end - time_start)/1_000_000:.2f}ms (with {(time_solr_end - time_solr_start)/1_000_000:.2f}ms waiting for Solr)"
     )
 
@@ -686,6 +810,13 @@ class NameResQuery(BaseModel):
         'none',
         description="Provide debugging information on the Solr query as per <a href=\"https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter\">Solr's debug parameter</a>."
     )
+    exact: Optional[ExactMatchMode] = Field(
+        None,
+        description="Exact-match mode: 'label' matches the preferred name only, "
+                    "'synonyms' matches any synonym, 'any' matches either. In every mode the "
+                    "entire string must match, case-insensitively. "
+                    "Omit (or null) for the default tokenized search.",
+    )
 
 
 @app.post("/bulk-lookup",
@@ -698,19 +829,31 @@ class NameResQuery(BaseModel):
 )
 async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
     time_start = time.time_ns()
-    result = {}
-    for string in query.strings:
-        result[string] = await lookup(
-            string,
-            query.autocomplete,
-            query.highlighting,
-            query.offset,
-            query.limit,
-            query.biolink_types,
-            query.only_prefixes,
-            query.exclude_prefixes,
-            query.only_taxa,
-            query.debug)
+
+    # Bounded so that a single large request can't open a socket per string; see
+    # SOLR_MAX_CONCURRENT_LOOKUPS.
+    semaphore = asyncio.Semaphore(SOLR_MAX_CONCURRENT_LOOKUPS)
+
+    async def do_lookup(string: str):
+        async with semaphore:
+            results = await lookup(
+                string,
+                query.autocomplete,
+                query.highlighting,
+                query.offset,
+                query.limit,
+                query.biolink_types,
+                query.only_prefixes,
+                query.exclude_prefixes,
+                query.only_taxa,
+                query.debug,
+                query.exact,
+            )
+        return string, results
+
+    pairs = await asyncio.gather(*[do_lookup(s) for s in query.strings])
+    result = dict(pairs)
+
     time_end = time.time_ns()
     logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}): took {(time_end - time_start)/1_000_000:.2f}ms")
     return result
