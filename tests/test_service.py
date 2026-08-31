@@ -398,3 +398,90 @@ def test_default_search_does_not_tolerate_misspellings():
     # some other property of the query.
     response = client.get("/lookup", params={'string': 'parkinson', 'limit': 100})
     assert len(response.json()) > 0
+
+
+def test_exact_rejects_autocomplete():
+    client = TestClient(app)
+    # autocomplete treats the final word as a prefix and exact requires the whole string to match,
+    # so the combination has no sensible meaning and must be refused rather than silently resolved.
+    response = client.get("/lookup", params={
+        'string': 'parkinsonian disorder',
+        'exact': 'label',
+        'autocomplete': 'true',
+    })
+    assert response.status_code == 400
+    assert 'autocomplete' in response.json()['detail']
+
+    # The same request without autocomplete is fine.
+    response = client.get("/lookup", params={'string': 'parkinsonian disorder', 'exact': 'label'})
+    assert response.status_code == 200
+
+    # ...and so is autocomplete without exact.
+    response = client.get("/lookup", params={'string': 'parkinsonian dis', 'autocomplete': 'true'})
+    assert response.status_code == 200
+
+
+def test_exact_highlighting_returns_the_whole_matched_value():
+    client = TestClient(app)
+
+    # HP:0001300 is preferred_name="parkinsonian disorder", names=["Parkinsonian disease"].
+    response = client.get("/lookup", params={
+        'string': 'parkinsonian disorder',
+        'exact': 'label',
+        'highlighting': 'true',
+        'limit': 100,
+    })
+    result = next(r for r in response.json() if r['curie'] == 'HP:0001300')
+    # The whole value matched, so the whole value comes back marked up.
+    assert result['highlighting']['labels'] == ['<strong>parkinsonian disorder</strong>']
+    assert result['highlighting']['synonyms'] == []
+
+    # Matching on a synonym highlights the synonym, in its original case rather than the query's.
+    response = client.get("/lookup", params={
+        'string': 'parkinsonian disease',
+        'exact': 'synonyms',
+        'highlighting': 'true',
+        'limit': 100,
+    })
+    result = next(r for r in response.json() if r['curie'] == 'HP:0001300')
+    assert result['highlighting']['labels'] == []
+    assert result['highlighting']['synonyms'] == ['<strong>Parkinsonian disease</strong>']
+
+    # Without highlighting the field stays empty, exactly as in the default search.
+    response = client.get("/lookup", params={
+        'string': 'parkinsonian disorder',
+        'exact': 'label',
+        'limit': 100,
+    })
+    result = next(r for r in response.json() if r['curie'] == 'HP:0001300')
+    assert result['highlighting'] == {}
+
+
+def test_exact_does_not_rewrite_smart_quotes():
+    client = TestClient(app)
+
+    # The default search folds typographic quotes to ASCII, because the input may have been
+    # mangled by Windows (issue #176) and StandardTokenizer discards the punctuation anyway.
+    response = client.get("/lookup", params={'string': '‘parkinson’', 'limit': 100})
+    assert response.status_code == 200
+
+    # Exact mode must not do that folding: the *_exactish fields keep whatever characters Babel
+    # emitted, so rewriting the query would search for a string the caller never typed. MONDO:0005180
+    # carries the ASCII "Parkinson's disease", which the ASCII query finds...
+    response = client.get("/lookup", params={
+        'string': "Parkinson's disease", 'exact': 'synonyms', 'limit': 100,
+    })
+    assert 'MONDO:0005180' in [r['curie'] for r in response.json()]
+
+    # ...and the typographic-apostrophe query does not, since that is a different string.
+    response = client.get("/lookup", params={
+        'string': 'Parkinson’s disease', 'exact': 'synonyms', 'limit': 100,
+    })
+    assert 'MONDO:0005180' not in [r['curie'] for r in response.json()]
+
+
+def test_solr_settings_are_sane():
+    # A concurrency limit of 0 would make every bulk lookup wait on a semaphore nobody can acquire.
+    assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS >= 1
+    # A stalled Solr connection must not be able to pin a bulk request forever by default.
+    assert api.server.SOLR_TIMEOUT is None or api.server.SOLR_TIMEOUT > 0

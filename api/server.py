@@ -4,6 +4,7 @@ Name Resolver (Name Lookup, NameRes) API Endpoints
 Queries are mostly sent to the underlying the NameRes Solr instance.
 """
 import asyncio
+import html
 import json
 import logging
 import warnings
@@ -13,7 +14,7 @@ import re
 from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
 
-from fastapi import Body, FastAPI, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse
 import httpx
 from pydantic import BaseModel, Field
@@ -36,7 +37,20 @@ SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
 # whole service is this multiplied by the number of concurrent /bulk-lookup requests being served.
 # 100 is set deliberately high on the assumption that Solr can take the strain, and should be
 # revisited once we know the real request rate -- see TranslatorSRI/babel-validation#107.
-SOLR_MAX_CONCURRENT_LOOKUPS = int(os.getenv("SOLR_MAX_CONCURRENT_LOOKUPS", "100"))
+#
+# Clamped to at least 1: a value of 0 would produce a semaphore nobody can acquire, wedging every
+# /bulk-lookup request forever with no error and no log line, which is a miserable thing to debug
+# for what is usually a typo in a deployment's environment.
+SOLR_MAX_CONCURRENT_LOOKUPS = max(1, int(os.getenv("SOLR_MAX_CONCURRENT_LOOKUPS", "100")))
+
+# How long to wait for Solr before giving up on a single query, in seconds.
+#
+# This matters more than it used to. When bulk_lookup() ran its lookups sequentially, a stalled
+# Solr connection held up one query; now that they run concurrently, one stalled connection can
+# pin an otherwise-complete bulk request indefinitely while holding a semaphore slot. Set it to
+# 0 to restore the previous behaviour of waiting forever.
+SOLR_TIMEOUT_SECONDS = float(os.getenv("SOLR_TIMEOUT_SECONDS", "60"))
+SOLR_TIMEOUT = SOLR_TIMEOUT_SECONDS if SOLR_TIMEOUT_SECONDS > 0 else None
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
@@ -73,7 +87,7 @@ async def status_get() -> Dict:
 async def status() -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
         response = await client.get(query_url, params={
             'action': 'STATUS'
         })
@@ -253,7 +267,7 @@ async def name_lookup(curies) -> Dict[str, Dict]:
         "query": curie_filter,
         "limit": 1000000,
     }
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
         response = await client.post(query, json=params)
     response.raise_for_status()
     response_json = response.json()
@@ -454,6 +468,17 @@ async def lookup(string: str,
 
     time_start = time.time_ns()
 
+    # autocomplete asks us to treat the last word as a prefix; exact asks us to match the whole
+    # string and nothing else. There is no sensible reading of the two together, so rather than
+    # silently ignoring one of them, say so.
+    if exact and autocomplete:
+        raise HTTPException(
+            status_code=400,
+            detail="autocomplete=true cannot be combined with exact matching: autocomplete treats "
+                   "the final word as an incomplete prefix, while exact requires the entire string "
+                   "to match. Please use one or the other.",
+        )
+
     # First, we strip and lowercase the query since all our indexes are case-insensitive.
     string_lc = string.strip().lower()
 
@@ -464,7 +489,15 @@ async def lookup(string: str,
     # But the only issue we've actually run into so far has been the Windows smart
     # quote (https://github.com/NCATSTranslator/NameResolution/issues/176), so for now
     # let's detect and replace just those characters.
-    string_lc = re.sub(r"[“”]", '"', re.sub(r"[‘’]", "'", string_lc))
+    #
+    # Deliberately not done in exact mode. The *_exactish fields are a KeywordTokenizer and a
+    # LowerCaseFilter, with no punctuation folding of their own, so the indexed value keeps
+    # whichever quote characters Babel emitted. Rewriting the query's quotes would therefore make
+    # exact mode search for a string the caller did not type, and would put any label containing a
+    # typographic quote permanently out of reach. The default search is unaffected either way,
+    # because StandardTokenizer discards the punctuation at index and query time alike.
+    if not exact:
+        string_lc = re.sub(r"[“”]", '"', re.sub(r"[‘’]", "'", string_lc))
 
     # Do we have a search string at all?
     if string_lc == "":
@@ -532,7 +565,9 @@ async def lookup(string: str,
 
     # Turn on highlighting if requested.
     inner_params = {}
-    if highlighting:
+    # In exact mode there is no scored query for Solr to highlight against (see below), so the
+    # highlighting is synthesized from the returned documents instead of asked for here.
+    if highlighting and not exact:
         inner_params.update({
             # Highlighting
             "hl": "true",
@@ -604,7 +639,7 @@ async def lookup(string: str,
 
     time_solr_start = time.time_ns()
     query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/{SOLR_CORE}/select"
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
         logger.error("Solr REST error: %s", response.text)
@@ -627,7 +662,29 @@ async def lookup(string: str,
         preferred_matches = []
         synonym_matches = []
 
-        if doc['id'] in highlighting_response:
+        if exact and highlighting:
+            # Solr did not highlight anything for us: exact mode matches with a filter query
+            # against fields that are not stored, so there is no scored query and nothing for the
+            # highlighter to mark up. Synthesize the same shape from the documents instead, so that
+            # a caller reading `highlighting` does not have to care which mode produced it.
+            #
+            # Every match in exact mode is a whole-value match, so the "highlighted" form of a
+            # matching name is simply the entire name wrapped in the same tags Solr would have
+            # used. Escape it first, since we ask Solr for hl.encoder=html in the default path.
+            def mark(value: str) -> str:
+                return f"<strong>{html.escape(value)}</strong>"
+
+            if exact in {ExactMatchMode.label, ExactMatchMode.any}:
+                preferred_name = doc.get("preferred_name", "")
+                if preferred_name.lower() == string_lc:
+                    preferred_matches.append(mark(preferred_name))
+
+            if exact in {ExactMatchMode.synonyms, ExactMatchMode.any}:
+                synonym_matches.extend(
+                    mark(name) for name in doc.get("names", []) if name.lower() == string_lc
+                )
+
+        elif doc['id'] in highlighting_response:
             matches = highlighting_response[doc['id']]
 
             # We order exactish matches before token matches.

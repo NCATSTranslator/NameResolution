@@ -253,6 +253,12 @@ Exact matching is implemented as a Solr filter query, which Solr caches, so repe
 
 Because there is no relevance score to rank by in exact mode, results are sorted by `clique_identifier_count` (descending) and then CURIE suffix (ascending), rather than by score. The `score` field is still present in each result, but it carries no ranking information.
 
+#### Exact matching and the other parameters
+
+- **`autocomplete` cannot be used with `exact`.** The two contradict each other — autocomplete treats the final word as an incomplete prefix, while exact requires the whole string to match — so the combination is rejected with a `400` rather than one of them being silently ignored.
+- **Typographic quotes are not rewritten in exact mode.** The default search folds `‘ ’ “ ”` to their ASCII equivalents, since input is sometimes mangled by Windows and the tokenizer discards the punctuation regardless. Exact mode deliberately does not: the `*_exactish` fields keep whatever characters Babel emitted, so rewriting the query would search for a string you did not type and would put any label containing a typographic quote out of reach. Search for the string exactly as it appears in the data.
+- **`highlighting` works, and always marks up the whole value.** Every match in exact mode is a whole-value match, so a highlighted result is the entire matching name wrapped in `<strong>`…`</strong>` — `parkinsonian disorder` matched with `exact=label` returns `{"labels": ["<strong>parkinsonian disorder</strong>"], "synonyms": []}`. The name is returned in its own capitalisation, not the query's, so a case-insensitive match is still visible as one.
+
 **Example:**
 
 ```
