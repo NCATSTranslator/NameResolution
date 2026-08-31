@@ -27,6 +27,12 @@ SOLR_PORT = os.getenv("SOLR_PORT", "8983")
 # backups we used to ship called it name_lookup_shard1_replica_n1 instead (see status()).
 SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
 
+# The maximum number of Solr queries a single /bulk-lookup request may have in flight at once.
+# bulk_lookup() runs its per-string lookups concurrently, and `strings` is unbounded, so without
+# this a large bulk request would open one socket per string -- enough to exhaust this process's
+# file descriptors and to stampede Solr. Raising this trades Solr load for bulk-lookup latency.
+SOLR_MAX_CONCURRENT_LOOKUPS = int(os.getenv("SOLR_MAX_CONCURRENT_LOOKUPS", "10"))
+
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOGLEVEL", logging.INFO))
@@ -746,20 +752,25 @@ class NameResQuery(BaseModel):
 async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
     time_start = time.time_ns()
 
+    # Bounded so that a single large request can't open a socket per string; see
+    # SOLR_MAX_CONCURRENT_LOOKUPS.
+    semaphore = asyncio.Semaphore(SOLR_MAX_CONCURRENT_LOOKUPS)
+
     async def do_lookup(string: str):
-        results = await lookup(
-            string,
-            query.autocomplete,
-            query.highlighting,
-            query.offset,
-            query.limit,
-            query.biolink_types,
-            query.only_prefixes,
-            query.exclude_prefixes,
-            query.only_taxa,
-            query.debug,
-            query.exact,
-        )
+        async with semaphore:
+            results = await lookup(
+                string,
+                query.autocomplete,
+                query.highlighting,
+                query.offset,
+                query.limit,
+                query.biolink_types,
+                query.only_prefixes,
+                query.exclude_prefixes,
+                query.only_taxa,
+                query.debug,
+                query.exact,
+            )
         return string, results
 
     pairs = await asyncio.gather(*[do_lookup(s) for s in query.strings])

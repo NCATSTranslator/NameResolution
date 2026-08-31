@@ -1,6 +1,6 @@
 import logging
 
-from api.server import app
+from api.server import app, SOLR_MAX_CONCURRENT_LOOKUPS
 from fastapi.testclient import TestClient
 
 # Turn on debugging for tests.
@@ -328,3 +328,42 @@ def test_exact_bulk_lookup():
     assert 'HP:0001300' in [r['curie'] for r in results['parkinsonian disorder']]
     assert 'HP:0001300' in [r['curie'] for r in results['Parkinsonian disease']]
     assert results['no match term xyz'] == []
+
+
+def test_exact_bulk_lookup_beyond_concurrency_limit():
+    """
+    bulk_lookup() runs its per-string lookups concurrently behind a semaphore, so exercise it with
+    more strings than SOLR_MAX_CONCURRENT_LOOKUPS allows in flight at once: every string must still
+    come back keyed to its own results, however the lookups interleave.
+    """
+    client = TestClient(app)
+
+    expected = {
+        'parkinsonian disorder': 'HP:0001300',
+        'Resting tremor': 'HP:0002322',
+        'juvenile-onset Parkinson disease': 'MONDO:0000828',
+        'postencephalitic Parkinson disease': 'MONDO:0001945',
+        'Parkinson disease': 'MONDO:0005180',
+        'secondary Parkinson disease': 'MONDO:0006966',
+        'Alzheimer disease type 1': 'MONDO:0007088',
+        'Alzheimer disease 2': 'MONDO:0007089',
+        'Lewy body dementia': 'MONDO:0007488',
+        'dystonia 5': 'MONDO:0007495',
+        'dystonia 12': 'MONDO:0007496',
+        'antiparkinson agent': 'CHEBI:48407',
+        'BACE1 inhibitor': 'CHEBI:74925',
+    }
+    assert len(expected) > SOLR_MAX_CONCURRENT_LOOKUPS, \
+        "This test is only meaningful with more strings than can be looked up concurrently."
+
+    response = client.post("/bulk-lookup", json={
+        'strings': list(expected.keys()),
+        'exact': 'label',
+        'limit': 100,
+    })
+    results = response.json()
+
+    assert set(results.keys()) == set(expected.keys())
+    for string, curie in expected.items():
+        assert curie in [r['curie'] for r in results[string]], \
+            f"Expected {curie} in the results for {string!r}, got {results[string]}"
