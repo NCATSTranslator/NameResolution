@@ -917,8 +917,21 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
     return result
 
 
-# Override open api schema with custom schema
-app.openapi_schema = construct_open_api_schema(app)
+# Override the OpenAPI schema with the one we build from api/resources/openapi.yml.
+#
+# This has to replace the openapi() method rather than assign to app.openapi_schema:
+# since FastAPI 0.137.0, openapi() rebuilds the schema whenever the app's recorded
+# routes version doesn't match the router's current one, and a schema we assigned
+# ourselves never carries that stamp -- so the first request to /openapi.json silently
+# overwrote it with FastAPI's default document (issue #294).
+def custom_openapi():
+    """Build the custom OpenAPI schema once, then serve it from the cache."""
+    if not app.openapi_schema:
+        app.openapi_schema = construct_open_api_schema(app)
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 # Set up opentelemetry if enabled.
 if os.environ.get('OTEL_ENABLED', 'false') == 'true':
