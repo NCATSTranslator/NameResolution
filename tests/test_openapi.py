@@ -65,3 +65,20 @@ def test_server_metadata_respects_environment(monkeypatch):
         assert server["url"] == "/nameres/"
         assert server["x-maturity"] == "testing"
         assert server["x-location"] == "RENCI"
+
+
+def test_building_the_schema_twice_leaves_the_first_alone(monkeypatch):
+    """openapi.yml is parsed once and cached, so each build must get its own copy.
+
+    construct_open_api_schema() rewrites the servers block in place from the
+    environment; if it worked on the cached parse, a later build would reach back and
+    edit a document already served to somebody.
+    """
+    monkeypatch.setenv("MATURITY_VALUE", "development")
+    first = construct_open_api_schema(app)
+
+    monkeypatch.setenv("MATURITY_VALUE", "production")
+    second = construct_open_api_schema(app)
+
+    assert first["servers"][0]["x-maturity"] == "development"
+    assert second["servers"][0]["x-maturity"] == "production"
