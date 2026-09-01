@@ -128,11 +128,12 @@ async def status() -> Dict:
     biolink_model_url = f"https://github.com/biolink/biolink-model/tree/{biolink_model_tag}"
     biolink_model_download_url = f"https://raw.githubusercontent.com/biolink/biolink-model/{biolink_model_tag}/biolink-model.yaml"
 
-    # Figure out the NameRes version.
-    nameres_version = "master"
-    app_info = get_app_info()
-    if 'version' in app_info and app_info['version']:
-        nameres_version = 'v' + app_info['version']
+    # Figure out the NameRes version. We report it twice, deliberately: `version` is the
+    # OpenAPI info.version verbatim, so that it can be compared against /openapi.json and
+    # against NodeNorm's /status, which reports the same key the same way (issue #296);
+    # `nameres_version` is the older 'v'-prefixed spelling, kept for existing consumers.
+    openapi_version = get_app_info().get('version') or ''
+    nameres_version = 'v' + openapi_version if openapi_version else 'master'
 
     # We should have a status for our core. Standalone Solr calls it $SOLR_CORE
     # (name_lookup); the older cloud-mode backups called it
@@ -143,6 +144,29 @@ async def status() -> Dict:
     if core is None and len(cores) == 1:
         core = next(iter(cores.values()))
 
+    # The fields both branches below report. Built once and spread into each, so that the
+    # two can't drift: the error branch is what a mis-pointed or still-loading deployment
+    # returns, and that is exactly the case in which a caller most needs to know which
+    # NameRes it reached.
+    common = {
+        # Always 'solr' from this implementation. The field exists so that callers can
+        # tell us apart from the Elasticsearch-backed NameRes at
+        # biothings/NameResolutionAPI, which reports 'elasticsearch' here; until it
+        # existed the only difference between the two was a word of prose in `message`
+        # (issue #296).
+        'backend': 'solr',
+        'version': openapi_version or 'unknown',
+        'babel_version': babel_version,
+        'babel_version_url': babel_version_url,
+        'biolink_model': {
+            'tag': biolink_model_tag,
+            'url': biolink_model_url,
+            'download_url': biolink_model_download_url,
+        },
+        'nameres_version': nameres_version,
+        'config': config.public(),
+    }
+
     if core is not None:
         index = {}
         if 'index' in core:
@@ -151,15 +175,7 @@ async def status() -> Dict:
         return {
             'status': 'ok',
             'message': 'Reporting results from primary core.',
-            'babel_version': babel_version,
-            'babel_version_url': babel_version_url,
-            'biolink_model': {
-                'tag': biolink_model_tag,
-                'url': biolink_model_url,
-                'download_url': biolink_model_download_url,
-            },
-            'nameres_version': nameres_version,
-            'config': config.public(),
+            **common,
             # .get() rather than [], like every field below it: Solr's core STATUS
             # returns a sparse entry for a core that is still initializing, and
             # /status is what the Kubernetes probes call. A KeyError here would turn
@@ -168,7 +184,9 @@ async def status() -> Dict:
             'numDocs': index.get('numDocs', ''),
             'maxDoc': index.get('maxDoc', ''),
             'deletedDocs': index.get('deletedDocs', ''),
-            'version': index.get('version', ''),
+            # The Solr index version. Called 'version' until #296, which handed that key
+            # to the API version so that NameRes and NodeNorm spell it the same way.
+            'index_version': index.get('version', ''),
             'segmentCount': index.get('segmentCount', ''),
             'lastModified': index.get('lastModified', ''),
             'size': index.get('size', ''),
@@ -177,15 +195,7 @@ async def status() -> Dict:
         return {
             'status': 'error',
             'message': 'Expected core not found.',
-            'babel_version': babel_version,
-            'babel_version_url': babel_version_url,
-            'biolink_model': {
-                'tag': biolink_model_tag,
-                'url': biolink_model_url,
-                'download_url': biolink_model_download_url,
-            },
-            'nameres_version': nameres_version,
-            'config': config.public(),
+            **common,
         }
 
 
