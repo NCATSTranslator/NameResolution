@@ -2,10 +2,11 @@ openapi: 3.0.2
 info:
   title: Name Resolver
   version: 1.7.0
-  email: bizon@renci.org
-  name: Chris Bizon
-  x-id: https://github.com/cbizon
-  x-role: responsible developer
+  contact:
+    email: bizon@renci.org
+    name: Chris Bizon
+    x-id: https://github.com/cbizon
+    x-role: responsible developer
   description: 'Name Resolver (Name Lookup) service<p/>This service takes lexical strings and attempts to map them to identifiers
     (CURIEs) from a vocabulary or ontology. An optional autocomplete mode (which assumes the query is incomplete) is available,
     as is an exact mode (which requires the whole string to match a name or synonym), along with many other options.
