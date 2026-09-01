@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 
 import api.server
@@ -16,11 +17,112 @@ def test_simple_check():
     assert len(syns) == 10
 
 def test_empty():
-    """ Checks that calling NameRes without an input string return an empty list. """
+    """ An empty (too-short) query on /lookup is rejected with HTTP 422. """
     client = TestClient(app)
     response = client.get("/lookup", params={'string':''})
-    syns = response.json()
-    assert len(syns) == 0
+    assert response.status_code == 422
+
+
+def test_minimum_query_length():
+    """
+    Queries shorter than config.minimum_query_length (default 2) are rejected on
+    /lookup with HTTP 422, but degrade to an empty list per-key on /bulk-lookup so
+    one short string doesn't fail the whole batch. The minimum is reported by /status.
+    """
+    client = TestClient(app)
+
+    # A single character on /lookup is too short -> 422.
+    response = client.get("/lookup", params={'string': 'a'})
+    assert response.status_code == 422
+
+    # A valid two-character query is not rejected (goes to Solr, returns a 200 list).
+    response = client.get("/lookup", params={'string': 'ab'})
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+    # On /bulk-lookup, a too-short string yields [] for its key; others resolve; request is 200.
+    response = client.post("/bulk-lookup", json={'strings': ['a', 'Parkinson'], 'limit': 100})
+    assert response.status_code == 200
+    results = response.json()
+    assert results['a'] == []
+    assert len(results['Parkinson']) == 34
+
+    # /status advertises the configured minimum under a nested config block. Compared against
+    # the running config rather than a literal 2, so that this still tests the wiring in a
+    # deployment that sets NAMERES_MINIMUM_QUERY_LENGTH, and survives another key being added.
+    response = client.get("/status")
+    assert response.json()['config']['minimum_query_length'] == api.server.config.minimum_query_length
+
+
+def test_too_short_is_reported_as_a_validation_error():
+    """
+    A query rejected for its length must come back in the same shape as one rejected by FastAPI's
+    own parameter validation -- `detail` a list of error objects, not a bare string -- because a
+    client iterating `detail` should not have to special-case this one rejection. That is also
+    what the endpoint's documented 422 schema (HTTPValidationError) promises; see
+    test_lookup_documents_the_validation_error_schema.
+    """
+    client = TestClient(app)
+    response = client.get("/lookup", params={'string': 'a'})
+    assert response.status_code == 422
+
+    detail = response.json()['detail']
+    assert isinstance(detail, list), f"Expected a list of errors, got {detail!r}"
+    assert detail[0]['loc'] == ['query', 'string']
+    assert detail[0]['type'] == 'string_too_short'
+    assert 'msg' in detail[0]
+
+    # An ordinary validation failure on the same endpoint (limit above its maximum) is shaped the
+    # same way, which is the point of the comparison.
+    response = client.get("/lookup", params={'string': 'Parkinson', 'limit': 100000})
+    assert response.status_code == 422
+    assert isinstance(response.json()['detail'], list)
+
+
+def test_lookup_documents_the_validation_error_schema():
+    """
+    FastAPI only generates the HTTPValidationError body for a 422 that the operation has not
+    already declared itself, so a hand-written `responses={422: ...}` on these endpoints would
+    silently strip the schema from the OpenAPI document and leave client generators with an
+    untyped error. Pin that the schema is there for both /lookup operations.
+    """
+    client = TestClient(app)
+    schema = client.get("/openapi.json").json()
+
+    for method in ('get', 'post'):
+        response_422 = schema['paths']['/lookup'][method]['responses']['422']
+        ref = response_422['content']['application/json']['schema']['$ref']
+        assert ref.endswith('/HTTPValidationError'), \
+            f"/lookup {method.upper()} documents 422 as {ref}, not HTTPValidationError"
+
+
+def test_empty_query_is_rejected_however_low_the_minimum_is(monkeypatch):
+    """
+    An empty query must never reach Solr: it builds the query `"" OR ()`, which Solr rejects as a
+    parse error, turning an empty search box into an HTTP 500. The length check is what stops it,
+    so it has to hold even when minimum_query_length is set to 0 -- the obvious way to turn the
+    minimum off, and the same thing SOLR_TIMEOUT_SECONDS=0 means one setting above it.
+    """
+    client = TestClient(app)
+    monkeypatch.setattr(api.server, "config",
+                        dataclasses.replace(api.server.config, minimum_query_length=0))
+
+    # A single character is now allowed through to Solr...
+    response = client.get("/lookup", params={'string': 'a'})
+    assert response.status_code == 200
+
+    # ...but an empty string, and one that is empty once stripped, are still rejected.
+    for string in ('', '   '):
+        response = client.get("/lookup", params={'string': string})
+        assert response.status_code == 422, \
+            f"Expected {string!r} to be rejected, got HTTP {response.status_code}"
+
+    # And on /bulk-lookup it degrades to [] for that key rather than failing the whole batch.
+    response = client.post("/bulk-lookup", json={'strings': ['', 'Parkinson'], 'limit': 100})
+    assert response.status_code == 200
+    results = response.json()
+    assert results[''] == []
+    assert len(results['Parkinson']) > 0
 
 def test_limit():
     client = TestClient(app)
@@ -263,12 +365,14 @@ def test_bulk_lookup_beyond_concurrency_limit(monkeypatch):
     keyed to its own results, however the lookups interleave. This is a property of bulk lookup
     rather than of exact matching; exact=label is used only to make each string's result definite.
 
-    The limit is patched down rather than sending SOLR_MAX_CONCURRENT_LOOKUPS-worth of real strings,
-    because the default (100) is larger than the number of distinct labels in the test data. Patching
-    the module attribute works because bulk_lookup() builds its semaphore per request, at call time.
+    The limit is patched down rather than sending a whole config.solr_max_concurrent_lookups worth
+    of real strings, because the default (100) is larger than the number of distinct labels in the
+    test data. Swapping in a replacement Config works because bulk_lookup() reads the limit and
+    builds its semaphore per request, at call time.
     """
     client = TestClient(app)
-    monkeypatch.setattr(api.server, "SOLR_MAX_CONCURRENT_LOOKUPS", 3)
+    monkeypatch.setattr(api.server, "config",
+                        dataclasses.replace(api.server.config, solr_max_concurrent_lookups=3))
 
     expected = {
         'parkinsonian disorder': 'HP:0001300',
@@ -285,7 +389,7 @@ def test_bulk_lookup_beyond_concurrency_limit(monkeypatch):
         'antiparkinson agent': 'CHEBI:48407',
         'BACE1 inhibitor': 'CHEBI:74925',
     }
-    assert len(expected) > api.server.SOLR_MAX_CONCURRENT_LOOKUPS, \
+    assert len(expected) > api.server.config.solr_max_concurrent_lookups, \
         "This test is only meaningful with more strings than can be looked up concurrently."
 
     response = client.post("/bulk-lookup", json={
@@ -326,27 +430,27 @@ def test_default_search_does_not_tolerate_misspellings():
 
 def test_solr_settings_are_sane():
     # A concurrency limit of 0 would make every bulk lookup wait on a semaphore nobody can acquire.
-    assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS >= 1
+    assert api.server.config.solr_max_concurrent_lookups >= 1
     # A stalled Solr connection must not be able to pin a bulk request forever by default.
-    assert api.server.SOLR_TIMEOUT is None or api.server.SOLR_TIMEOUT > 0
+    assert api.server.config.solr_timeout is None or api.server.config.solr_timeout > 0
 
 
 def test_concurrency_limit_is_clamped_to_at_least_one(monkeypatch):
     """
     SOLR_MAX_CONCURRENT_LOOKUPS=0 would build a semaphore nobody can ever acquire, hanging every
-    bulk lookup with no error and no log line. The clamp runs at import, so this has to reload the
-    module to exercise it.
+    bulk lookup with no error and no log line. The clamp runs when Config is instantiated at import,
+    so this has to reload the module to exercise it.
     """
     import importlib
 
     try:
         monkeypatch.setenv("SOLR_MAX_CONCURRENT_LOOKUPS", "0")
         importlib.reload(api.server)
-        assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS == 1
+        assert api.server.config.solr_max_concurrent_lookups == 1
 
         monkeypatch.setenv("SOLR_MAX_CONCURRENT_LOOKUPS", "25")
         importlib.reload(api.server)
-        assert api.server.SOLR_MAX_CONCURRENT_LOOKUPS == 25
+        assert api.server.config.solr_max_concurrent_lookups == 25
     finally:
         # Restore the module for whatever runs next, since reload mutates it in place.
         monkeypatch.delenv("SOLR_MAX_CONCURRENT_LOOKUPS", raising=False)

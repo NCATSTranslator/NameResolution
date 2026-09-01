@@ -11,10 +11,12 @@ import warnings
 import time
 import os
 import re
+from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
 
 from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import RedirectResponse
 import httpx
 from pydantic import BaseModel, Field
@@ -22,35 +24,55 @@ from starlette.middleware.cors import CORSMiddleware
 
 from api.apidocs import get_app_info, construct_open_api_schema
 
-SOLR_HOST = os.getenv("SOLR_HOST", "localhost")
-SOLR_PORT = os.getenv("SOLR_PORT", "8983")
-# The Solr core to query. In standalone mode this is the core name; the cloud-mode
-# backups we used to ship called it name_lookup_shard1_replica_n1 instead (see status()).
-SOLR_CORE = os.getenv("SOLR_CORE", "name_lookup")
+@dataclass(frozen=True)
+class Config:
+    """Runtime configuration, populated from environment variables at import."""
+    # Solr connection (private — not exposed via /status).
+    solr_host: str = os.getenv("SOLR_HOST", "localhost")
+    solr_port: str = os.getenv("SOLR_PORT", "8983")
 
-# The maximum number of Solr queries a single /bulk-lookup request may have in flight at once.
-# bulk_lookup() runs its per-string lookups concurrently, and `strings` is unbounded, so without
-# this a large bulk request would open one socket per string -- enough to exhaust this process's
-# file descriptors and to stampede Solr. Raising this trades Solr load for bulk-lookup latency.
-#
-# Note that this bounds a *single* request, not the process: the Solr queries in flight across the
-# whole service is this multiplied by the number of concurrent /bulk-lookup requests being served.
-# 100 is set deliberately high on the assumption that Solr can take the strain, and should be
-# revisited once we know the real request rate -- see TranslatorSRI/babel-validation#107.
-#
-# Clamped to at least 1: a value of 0 would produce a semaphore nobody can acquire, wedging every
-# /bulk-lookup request forever with no error and no log line, which is a miserable thing to debug
-# for what is usually a typo in a deployment's environment.
-SOLR_MAX_CONCURRENT_LOOKUPS = max(1, int(os.getenv("SOLR_MAX_CONCURRENT_LOOKUPS", "100")))
+    # The Solr core to query. In standalone mode this is the core name; the cloud-mode
+    # backups we used to ship called it name_lookup_shard1_replica_n1 instead (see status()).
+    solr_core: str = os.getenv("SOLR_CORE", "name_lookup")
 
-# How long to wait for Solr before giving up on a single query, in seconds.
-#
-# This matters more than it used to. When bulk_lookup() ran its lookups sequentially, a stalled
-# Solr connection held up one query; now that they run concurrently, one stalled connection can
-# pin an otherwise-complete bulk request indefinitely while holding a semaphore slot. Set it to
-# 0 to restore the previous behaviour of waiting forever.
-SOLR_TIMEOUT_SECONDS = float(os.getenv("SOLR_TIMEOUT_SECONDS", "60"))
-SOLR_TIMEOUT = SOLR_TIMEOUT_SECONDS if SOLR_TIMEOUT_SECONDS > 0 else None
+    # The maximum number of Solr queries a single /bulk-lookup request may have in flight at once.
+    # bulk_lookup() runs its per-string lookups concurrently, and `strings` is unbounded, so without
+    # this a large bulk request would open one socket per string -- enough to exhaust this process's
+    # file descriptors and to stampede Solr. Raising this trades Solr load for bulk-lookup latency.
+    #
+    # Note that this bounds a *single* request, not the process: the Solr queries in flight across
+    # the whole service is this multiplied by the number of concurrent /bulk-lookup requests being
+    # served. 100 is set deliberately high on the assumption that Solr can take the strain, and
+    # should be revisited once we know the real request rate -- see TranslatorSRI/babel-validation#107.
+    #
+    # Clamped to at least 1: a value of 0 would produce a semaphore nobody can acquire, wedging
+    # every /bulk-lookup request forever with no error and no log line, which is a miserable thing
+    # to debug for what is usually a typo in a deployment's environment.
+    solr_max_concurrent_lookups: int = max(1, int(os.getenv("SOLR_MAX_CONCURRENT_LOOKUPS", "100")))
+
+    # How long to wait for Solr before giving up on a single query, in seconds.
+    #
+    # This matters more than it used to. When bulk_lookup() ran its lookups sequentially, a stalled
+    # Solr connection held up one query; now that they run concurrently, one stalled connection can
+    # pin an otherwise-complete bulk request indefinitely while holding a semaphore slot. Set it to
+    # 0 to restore the previous behaviour of waiting forever.
+    solr_timeout_seconds: float = float(os.getenv("SOLR_TIMEOUT_SECONDS", "60"))
+
+    # Queries shorter than this (after strip) are rejected: single-char queries
+    # are slow in Solr and never useful. Translator expects results at length 2.
+    minimum_query_length: int = int(os.getenv("NAMERES_MINIMUM_QUERY_LENGTH", "2"))
+
+    @property
+    def solr_timeout(self) -> Optional[float]:
+        """The per-query httpx timeout; None (from a non-positive setting) waits forever."""
+        return self.solr_timeout_seconds if self.solr_timeout_seconds > 0 else None
+
+    def public(self) -> dict:
+        """Config values safe to surface via /status. Infra config stays private."""
+        return {"minimum_query_length": self.minimum_query_length}
+
+
+config = Config()
 
 app = FastAPI(**get_app_info())
 logger = logging.getLogger(__name__)
@@ -86,8 +108,8 @@ async def status_get() -> Dict:
 
 async def status() -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
-    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/admin/cores"
-    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
+    query_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/cores"
+    async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
         response = await client.get(query_url, params={
             'action': 'STATUS'
         })
@@ -112,12 +134,12 @@ async def status() -> Dict:
     if 'version' in app_info and app_info['version']:
         nameres_version = 'v' + app_info['version']
 
-    # We should have a status for our core. Standalone Solr calls it ${SOLR_CORE}
+    # We should have a status for our core. Standalone Solr calls it $SOLR_CORE
     # (name_lookup); the older cloud-mode backups called it
     # name_lookup_shard1_replica_n1. A NameRes Solr only ever has one core, so if the
     # expected name isn't there but there is exactly one core, report on that one.
     cores = result.get('status', {})
-    core = cores.get(SOLR_CORE)
+    core = cores.get(config.solr_core)
     if core is None and len(cores) == 1:
         core = next(iter(cores.values()))
 
@@ -137,6 +159,7 @@ async def status() -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
+            'config': config.public(),
             # .get() rather than [], like every field below it: Solr's core STATUS
             # returns a sparse entry for a core that is still initializing, and
             # /status is what the Kubernetes probes call. A KeyError here would turn
@@ -162,6 +185,7 @@ async def status() -> Dict:
                 'download_url': biolink_model_download_url,
             },
             'nameres_version': nameres_version,
+            'config': config.public(),
         }
 
 
@@ -258,7 +282,7 @@ async def synonyms_post(
 async def name_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
     time_start = time.time_ns()
-    query = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/{SOLR_CORE}/select"
+    query = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
         for curie in curies
@@ -267,7 +291,7 @@ async def name_lookup(curies) -> Dict[str, Dict]:
         "query": curie_filter,
         "limit": 1000000,
     }
-    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
         response = await client.post(query, json=params)
     response.raise_for_status()
     response_json = response.json()
@@ -313,7 +337,11 @@ class LookupResult(BaseModel):
 )
 async def lookup_curies_get(
         string: Annotated[str, Query(
-            description="The string to search for."
+            description="The string to search for. Must be at least the configured minimum length "
+                        "(see `minimum_query_length` in `/status`, default 2) after leading/trailing "
+                        "whitespace is stripped; shorter queries are rejected with HTTP 422. The "
+                        "minimum does not apply when `exact` is set, where any non-empty string is "
+                        "searched for."
         )],
         autocomplete: Annotated[bool, Query(
             description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
@@ -370,7 +398,7 @@ async def lookup_curies_get(
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, exact)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, exact, raise_on_too_short=True)
 
 
 @app.post("/lookup",
@@ -383,7 +411,11 @@ async def lookup_curies_get(
 )
 async def lookup_curies_post(
         string: Annotated[str, Query(
-            description="The string to search for."
+            description="The string to search for. Must be at least the configured minimum length "
+                        "(see `minimum_query_length` in `/status`, default 2) after leading/trailing "
+                        "whitespace is stripped; shorter queries are rejected with HTTP 422. The "
+                        "minimum does not apply when `exact` is set, where any non-empty string is "
+                        "searched for."
         )],
         autocomplete: Annotated[bool, Query(
             description="Is the input string incomplete (autocomplete=true) or a complete phrase (autocomplete=false)?"
@@ -440,7 +472,7 @@ async def lookup_curies_post(
     """
     Returns cliques with a name or synonym that contains a specified string.
     """
-    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, exact)
+    return await lookup(string, autocomplete, highlighting, offset, limit, biolink_type, only_prefixes, exclude_prefixes, only_taxa, debug, exact, raise_on_too_short=True)
 
 
 async def lookup(string: str,
@@ -454,6 +486,7 @@ async def lookup(string: str,
            only_taxa: str = "",
            debug: DebugOptions = 'none',
            exact: Optional[ExactMatchMode] = None,
+           raise_on_too_short: bool = False,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
@@ -499,8 +532,33 @@ async def lookup(string: str,
     if not exact:
         string_lc = re.sub(r"[“”]", '"', re.sub(r"[‘’]", "'", string_lc))
 
-    # Do we have a search string at all?
-    if string_lc == "":
+    # Is the query long enough to be worth searching?
+    #
+    # config.minimum_query_length exists because short queries are slow in the default tokenized
+    # search -- a one-character query matches a prefix of half the index -- and never return
+    # anything useful. Exact mode has neither problem: it is a single filter query against an
+    # untokenized field, and single-character labels are real (the gene T, the element symbols),
+    # so the minimum would put them permanently out of reach for no gain. It is therefore held to
+    # nothing but non-emptiness.
+    #
+    # The floor of 1 is not redundant with the setting. An empty query is rejected whatever
+    # minimum_query_length is set to, because it would otherwise reach Solr as `"" OR ()` and come
+    # back as a parse error -- an HTTP 500 for what is really an empty search box.
+    minimum_length = 1 if exact else max(1, config.minimum_query_length)
+    if len(string_lc) < minimum_length:
+        if raise_on_too_short:
+            # A RequestValidationError rather than an HTTPException, so that a query rejected for
+            # its length is reported in the same shape -- and documented by the same schema -- as
+            # one rejected by FastAPI's own parameter validation. A caller iterating `detail` as a
+            # list of errors should not have to special-case this one rejection.
+            raise RequestValidationError([{
+                "type": "string_too_short",
+                "loc": ("query", "string"),
+                "msg": f"String should have at least {minimum_length} character(s) after "
+                       f"leading and trailing whitespace is stripped",
+                "input": string,
+                "ctx": {"min_length": minimum_length},
+            }])
         return []
 
     # For reasons I don't understand, we need to use backslash to escape characters (e.g. "\(") to remove the special
@@ -649,8 +707,8 @@ async def lookup(string: str,
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
     time_solr_start = time.time_ns()
-    query_url = f"http://{SOLR_HOST}:{SOLR_PORT}/solr/{SOLR_CORE}/select"
-    async with httpx.AsyncClient(timeout=SOLR_TIMEOUT) as client:
+    query_url = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
+    async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
         response = await client.post(query_url, json=params)
     if response.status_code >= 300:
         logger.error("Solr REST error: %s", response.text)
@@ -831,8 +889,8 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
     time_start = time.time_ns()
 
     # Bounded so that a single large request can't open a socket per string; see
-    # SOLR_MAX_CONCURRENT_LOOKUPS.
-    semaphore = asyncio.Semaphore(SOLR_MAX_CONCURRENT_LOOKUPS)
+    # Config.solr_max_concurrent_lookups.
+    semaphore = asyncio.Semaphore(config.solr_max_concurrent_lookups)
 
     async def do_lookup(string: str):
         async with semaphore:

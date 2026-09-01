@@ -120,7 +120,7 @@ Search for cliques by a fragment of a name or synonym.
 
 **Parameters:**
 
-- `string` (required, string): The string to search for.
+- `string` (required, string): The string to search for. Must be at least the configured minimum length (see `minimum_query_length` in [`/status`](#status), default 2) after leading/trailing whitespace is stripped; shorter queries are rejected with HTTP 422, in the same body shape as any other parameter validation failure. The minimum does not apply when [`exact`](#exact-matching) is set — exact matching is a single filter query rather than a tokenized search, and short labels such as the gene `T` are legitimate targets for it — but an empty string is rejected in every mode.
 - `autocomplete` (optional, boolean, default: false): If `true`, treats the input string as incomplete and looks for terms that start with the final word. If `false`, treats the entire phrase as complete (entity linker mode).
 - `highlighting` (optional, boolean, default: false): If `true`, returns information on which labels and synonyms matched the search query.
 - `offset` (optional, integer, default: 0, minimum: 0): The number of results to skip. Used for pagination.
@@ -195,7 +195,7 @@ Search for cliques for multiple strings in a single request.
 - `strings` (required, list of strings): A list of strings to search for. The returned results will be in a dictionary with these values as keys.
 - All other parameters are optional and apply to all searches.
 
-**Returns:** A dictionary where each key is a string from the input `strings` array, and each value is a list of `LookupResult` objects (same structure as `/lookup` results).
+**Returns:** A dictionary where each key is a string from the input `strings` array, and each value is a list of `LookupResult` objects (same structure as `/lookup` results). Unlike `/lookup`, a string shorter than the configured minimum length (see `minimum_query_length` in [`/status`](#status), default 2) is not rejected: it simply maps to an empty list, so one too-short string does not fail the whole batch. An empty string, and a string shorter than the minimum in `exact` mode, are treated the same way.
 
 **Example request:**
 
@@ -348,7 +348,11 @@ Returns the status of the service. Most importantly, this returns the [Babel](ht
 version and changelog URL, which can be used to determine which version of Babel is currently loaded in this service.
 It also includes the NameRes version (also visible in the OpenAPI documentation)
 and the Biolink Model version used to build the Solr database, as well as bunch of information from the underlying
-Solr database.
+Solr database. The `config` object reports publicly-relevant configuration for this instance; currently just
+`minimum_query_length`, the shortest query (in characters, after whitespace is stripped) that `/lookup` and
+`/bulk-lookup` will search for in the default tokenized search. It defaults to 2 and can be set per deployment with the
+`NAMERES_MINIMUM_QUERY_LENGTH` environment variable. It does not constrain [exact matching](#exact-matching), which
+accepts any non-empty string.
 
 ```json
 {
@@ -362,6 +366,9 @@ Solr database.
     "download_url": "https://raw.githubusercontent.com/biolink/biolink-model/v4.2.6-rc5/biolink-model.yaml"
   },
   "nameres_version": "v1.5.1",
+  "config": {
+    "minimum_query_length": 2
+  },
   "startTime": "2025-12-19T11:53:09.638Z",
   "numDocs": 425583391,
   "maxDoc": 425586610,
