@@ -50,6 +50,9 @@ def construct_open_api_schema(app) -> Dict[str, str]:
     if 'contact' in api_docs['info']:
         open_api_schema['info']['contact'] = api_docs['info']['contact']
 
+    if 'license' in api_docs['info']:
+        open_api_schema['info']['license'] = api_docs['info']['license']
+
     if 'termsOfService' in api_docs['info']:
         open_api_schema['info']['termsOfService'] = api_docs['info']['termsOfService']
 
