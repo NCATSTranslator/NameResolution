@@ -26,6 +26,7 @@ present (no `?full=true` needed).
 | `mean_solr_time_ms` | Of that, the average time spent waiting on Solr. If this is close to `mean_time_ms`, the bottleneck is inside Solr; if it is much smaller, the bottleneck is Python-side result processing. |
 | `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `query_handler` percentiles localizes a latency tail: if the end-to-end `p99_ms` is far above `query_handler.p99_ms`, the tail is in NameRes (result processing, GC in the Python process), not Solr. Computed locally, so they need no `?full=true` round-trip. |
 | `count` / `max` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). |
+| `failed` / `timed_out` | How many queries in the window failed, and how many of those hit `SOLR_TIMEOUT_SECONDS`. Unlike `query_handler.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `p99_ms` too. |
 
 ### Solr query handler (`solr_metrics.query_handler`)
 
@@ -92,6 +93,13 @@ INFO: Lookup query to Solr for "diabetes" (autocomplete=False, ... only_taxa=Non
       took 123.45ms (with 100.12ms waiting for Solr)
 
 WARNING: SLOW QUERY: Lookup query to Solr for "..." ... took 850.12ms (with 840.00ms waiting for Solr)
+```
+
+A lookup that fails instead logs at WARNING with the outcome (`timeout` or `error`) and the
+exception type, before the exception becomes an HTTP 500:
+
+```
+WARNING: FAILED QUERY (timeout: ReadTimeout): Lookup query to Solr for "..." ...: failed after 60012.40ms
 ```
 
 Key interpretation:

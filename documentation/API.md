@@ -384,7 +384,9 @@ accepts any non-empty string.
     "mean_solr_time_ms": 38.1,
     "p50_ms": 21.0,
     "p95_ms": 140.5,
-    "p99_ms": 410.2
+    "p99_ms": 410.2,
+    "failed": 0,
+    "timed_out": 0
   },
   "solr_metrics": {
     "query_handler": {
@@ -430,7 +432,7 @@ accepts any non-empty string.
 }
 ```
 
-`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `max` is the size of the tracking window (default 50000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `count` is how many queries have actually been recorded so far. `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. `p50_ms`/`p95_ms`/`p99_ms` are the end-to-end latency percentiles the caller actually sees; comparing them against `solr_metrics.query_handler`'s Solr-side percentiles localizes a latency tail to Solr vs. NameRes. These are computed from local data (no Solr round-trip), so they are present on the default `/status` path. All of these are `null` until at least a couple of queries have been handled.
+`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `max` is the size of the tracking window (default 50000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `count` is how many queries have actually been recorded so far. `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. `p50_ms`/`p95_ms`/`p99_ms` are the end-to-end latency percentiles the caller actually sees; comparing them against `solr_metrics.query_handler`'s Solr-side percentiles localizes a latency tail to Solr vs. NameRes. These are computed from local data (no Solr round-trip), so they are present on the default `/status` path. All of these are `null` until at least a couple of queries have been handled. `failed` is how many of the queries in the window failed (Solr returned an error, could not be reached, or did not answer within `SOLR_TIMEOUT_SECONDS`), and `timed_out` is how many of those were timeouts. Failed queries are included in the timings above, since their callers waited for them too.
 
 `solr_metrics` is only populated when the `?full=true` query parameter is passed, as fetching it requires an additional round-trip to Solr; the default `/status` stays cheap for Kubernetes liveness probes. Without `?full=true`, the field holds a short `{"message": ...}` placeholder. With `?full=true`, a failed fetch is reported as `{"error": ...}` instead, so it cannot be mistaken for a request that did not ask for metrics.
 

@@ -48,6 +48,7 @@ def test_status_shape():
     assert 'mean_solr_time_ms' in rq
     # End-to-end percentiles (local, no Solr round-trip) are on the default /status path.
     assert 'p50_ms' in rq and 'p95_ms' in rq and 'p99_ms' in rq
+    assert 'failed' in rq and 'timed_out' in rq
 
     # solr_metrics should be present but with only a message unless ?full=true is passed.
     assert 'solr_metrics' in data and 'message' in data['solr_metrics']
@@ -173,3 +174,26 @@ def test_status_tolerates_non_numeric_gc_gauge(monkeypatch):
     assert sm['jvm']['gc_count'] == 3
     assert sm['jvm']['gc_time_ms'] == 40
 
+
+@pytest.mark.parametrize("failure, outcome", [
+    (httpx.ReadTimeout("timed out"), 'timeout'),
+    (httpx.ConnectError("connection refused"), 'error'),
+])
+def test_failed_lookup_is_recorded(monkeypatch, caplog, failure, outcome):
+    """A lookup that fails -- above all one that times out -- still counts in recent_queries."""
+    async def failing_post(self, url, **kwargs):
+        raise failure
+    monkeypatch.setattr(httpx.AsyncClient, "post", failing_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get())
+    client = TestClient(app, raise_server_exceptions=False)
+
+    before = client.get("/status").json()['recent_queries']
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        assert client.get("/lookup", params={'string': 'alzheimer'}).status_code == 500
+    after = client.get("/status").json()['recent_queries']
+
+    assert after['failed'] == before['failed'] + 1
+    assert after['timed_out'] == before['timed_out'] + (1 if outcome == 'timeout' else 0)
+    assert after['count'] == min(before['count'] + 1, after['max'])
+    assert any(r.levelno == logging.WARNING and f"FAILED QUERY ({outcome}" in r.getMessage()
+               for r in caplog.records)

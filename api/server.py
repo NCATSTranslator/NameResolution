@@ -12,7 +12,7 @@ import warnings
 import time
 import os
 import re
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
@@ -94,6 +94,16 @@ DEFAULT_RECENT_TIMES_COUNT = 50000
 RECENT_TIMES_COUNT = int(os.getenv("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_COUNT))
 recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
 recent_solr_times = deque(maxlen=RECENT_TIMES_COUNT)
+# 'ok', 'error' or 'timeout' for each of the same queries, so /status can say how many of the
+# timings in the window belong to lookups that failed.
+recent_query_outcomes = deque(maxlen=RECENT_TIMES_COUNT)
+
+
+def record_lookup_time(time_taken_ms: float, time_taken_ms_solr: float, outcome: str = 'ok'):
+    """ Add one /lookup to the window that /status reports as recent_queries. """
+    recent_query_times.append(time_taken_ms)
+    recent_solr_times.append(time_taken_ms_solr)
+    recent_query_outcomes.append(outcome)
 
 # Lookups slower than this (end-to-end, in ms) are logged at WARNING instead of INFO,
 # so slow queries stand out in the logs. See documentation/Performance.md.
@@ -275,6 +285,7 @@ async def status(full: bool = False) -> Dict:
     else:
         p50 = p95 = p99 = None
 
+    outcomes = Counter(recent_query_outcomes)
     recent_queries = {
         'max': RECENT_TIMES_COUNT,
         'count': len(recent_query_times),
@@ -283,6 +294,10 @@ async def status(full: bool = False) -> Dict:
         'p50_ms': p50,
         'p95_ms': p95,
         'p99_ms': p99,
+        # Lookups in the window that failed, and how many of those hit SOLR_TIMEOUT_SECONDS.
+        # Their times are in the figures above: a timed-out lookup kept its caller waiting too.
+        'failed': outcomes['error'] + outcomes['timeout'],
+        'timed_out': outcomes['timeout'],
     }
 
     # We should have a status for our core. Standalone Solr calls it $SOLR_CORE
@@ -861,14 +876,30 @@ async def lookup(string: str,
         }
     logger.debug(f"Query: {json.dumps(params, indent=2)}")
 
+    log_msg_prefix = (f"Lookup query to Solr for {json.dumps(string)} " +
+                      f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}, exact={exact})")
+
     time_solr_start = time.time_ns()
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
-    async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
-        response = await client.post(query_url, json=params)
-    if response.status_code >= 300:
-        logger.error("Solr REST error: %s", response.text)
-        response.raise_for_status()
-    response = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
+            response = await client.post(query_url, json=params)
+        if response.status_code >= 300:
+            logger.error("Solr REST error: %s", response.text)
+            response.raise_for_status()
+        response = response.json()
+    except Exception as e:
+        # A failed lookup still has to be timed. The ones that hit SOLR_TIMEOUT_SECONDS are the
+        # slowest requests of all, so recording times only on success would leave them out of
+        # recent_queries -- and out of the log -- and make /status look healthiest exactly when
+        # Solr is struggling.
+        time_failed = time.time_ns()
+        time_taken_ms = (time_failed - time_start)/1_000_000
+        outcome = 'timeout' if isinstance(e, httpx.TimeoutException) else 'error'
+        record_lookup_time(time_taken_ms, (time_failed - time_solr_start)/1_000_000, outcome)
+        logger.warning(f"FAILED QUERY ({outcome}: {type(e).__name__}): {log_msg_prefix}: "
+                       f"failed after {time_taken_ms:.2f}ms")
+        raise
 
     # Do we have any debug.explain information?
     explain_info = {}
@@ -957,10 +988,8 @@ async def lookup(string: str,
     time_end = time.time_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
     time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
-    recent_query_times.append(time_taken_ms)
-    recent_solr_times.append(time_taken_ms_solr)
-    log_msg = (f"Lookup query to Solr for {json.dumps(string)} " +
-               f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}, exact={exact}): "
+    record_lookup_time(time_taken_ms, time_taken_ms_solr)
+    log_msg = (f"{log_msg_prefix}: "
                f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms waiting for Solr)")
     if time_taken_ms > SLOW_QUERY_THRESHOLD_MS:
         logger.warning("SLOW QUERY: " + log_msg)
