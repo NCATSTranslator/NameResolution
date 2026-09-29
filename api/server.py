@@ -150,7 +150,16 @@ async def status(full: bool = False) -> Dict:
                     ('prefix', 'os.'),
                     ('wt', 'json'),
                 ])
-                if metrics_resp.status_code < 300:
+                # A caller who asked for ?full=true must be able to tell a failed fetch from not
+                # having asked, so every failure below replaces the placeholder -- whose advice is
+                # to pass ?full=true -- with an 'error' saying what went wrong.
+                if metrics_resp.status_code >= 300:
+                    logger.warning("Solr error on accessing /solr/admin/metrics: HTTP %d: %s",
+                                   metrics_resp.status_code, metrics_resp.text)
+                    solr_metrics = {
+                        "error": f"Solr's /admin/metrics returned HTTP {metrics_resp.status_code}."
+                    }
+                else:
                     all_metrics = metrics_resp.json().get('metrics', {})
 
                     # A NameRes Solr has exactly one core; its metrics registry is named
@@ -190,8 +199,12 @@ async def status(full: bool = False) -> Dict:
 
                     # GC pause totals across whichever collectors are configured (G1, etc.).
                     # High gc_time_ms relative to uptime points at heap pressure — a heap-sizing signal.
-                    gc_count = sum(v for k, v in jvm.items() if k.startswith('gc.') and k.endswith('.count'))
-                    gc_time_ms = sum(v for k, v in jvm.items() if k.startswith('gc.') and k.endswith('.time'))
+                    # Skip anything non-numeric rather than letting one odd gauge fail the whole block.
+                    def _gc_total(suffix):
+                        return sum(v for k, v in jvm.items()
+                                   if k.startswith('gc.') and k.endswith(suffix) and isinstance(v, (int, float)))
+                    gc_count = _gc_total('.count')
+                    gc_time_ms = _gc_total('.time')
 
                     solr_metrics = {
                         'query_handler': {
@@ -227,8 +240,11 @@ async def status(full: bool = False) -> Dict:
                             'total_physical_mem_mb': _mb(jvm.get('os.totalPhysicalMemorySize')),
                         },
                     }
-            except Exception:
+            except Exception as e:
                 logger.warning("Failed to retrieve Solr metrics for /status", exc_info=True)
+                solr_metrics = {
+                    "error": f"Could not retrieve Solr metrics: {type(e).__name__}: {e}"
+                }
 
     result = response.json()
 

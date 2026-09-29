@@ -7,7 +7,9 @@ load, and other causes.
 
 All the Solr-side metrics below live under `solr_metrics`, which is only fetched when you
 call **`/status?full=true`** (it adds a round-trip to Solr, so the default `/status` stays
-cheap for Kubernetes liveness probes). See [API.md](API.md#status) for the full response.
+cheap for Kubernetes liveness probes). If `solr_metrics` comes back as `{"error": ...}`, the
+fetch from Solr's `/admin/metrics` failed, and the NameRes log has the details. See
+[API.md](API.md#status) for the full response.
 
 ---
 

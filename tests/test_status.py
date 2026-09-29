@@ -1,5 +1,8 @@
 import logging
 
+import httpx
+import pytest
+
 from api.server import app
 from fastapi.testclient import TestClient
 
@@ -57,25 +60,25 @@ def test_status_metrics_param():
     assert response.status_code == 200
     data = response.json()
 
-    assert 'solr_metrics' in data
-    # solr_metrics may be None if Solr's metrics API is unavailable, but if present
-    # it must contain the expected structure.
-    if 'message' not in data['solr_metrics']:
-        sm = data['solr_metrics']
-        assert 'query_handler' in sm
-        assert 'cache' in sm
-        assert 'jvm' in sm
-        assert 'host' in sm
-        assert 'requests' in sm['query_handler']
-        assert 'filterCache' in sm['cache'] and 'queryResultCache' in sm['cache']
-        assert 'hitratio' in sm['cache']['filterCache']
-        assert 'heap_used_pct' in sm['jvm']
-        # GC and host resource fields drive Solr pod sizing decisions.
-        assert 'gc_count' in sm['jvm'] and 'gc_time_ms' in sm['jvm']
-        assert 'available_processors' in sm['host']
-        assert 'total_physical_mem_mb' in sm['host']
-        # errors/timeouts should be scalar counts (or None), not nested meter dicts.
-        assert not isinstance(sm['query_handler']['errors'], dict)
+    sm = data['solr_metrics']
+    # The test Solr is healthy, so the fetch should succeed; the failure paths are
+    # covered by the faked-Solr tests below.
+    assert 'error' not in sm, sm['error']
+    assert 'message' not in sm
+    assert 'query_handler' in sm
+    assert 'cache' in sm
+    assert 'jvm' in sm
+    assert 'host' in sm
+    assert 'requests' in sm['query_handler']
+    assert 'filterCache' in sm['cache'] and 'queryResultCache' in sm['cache']
+    assert 'hitratio' in sm['cache']['filterCache']
+    assert 'heap_used_pct' in sm['jvm']
+    # GC and host resource fields drive Solr pod sizing decisions.
+    assert 'gc_count' in sm['jvm'] and 'gc_time_ms' in sm['jvm']
+    assert 'available_processors' in sm['host']
+    assert 'total_physical_mem_mb' in sm['host']
+    # errors/timeouts should be scalar counts (or None), not nested meter dicts.
+    assert not isinstance(sm['query_handler']['errors'], dict)
 
 
 def test_status_recent_queries_populated():
@@ -113,3 +116,60 @@ def test_fast_query_does_not_warn(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="api.server"):
         client.get("/lookup", params={'string': 'diabetes'})
     assert not any("SLOW QUERY" in r.getMessage() for r in caplog.records)
+
+
+# The tests below fake Solr's responses by patching httpx.AsyncClient, so they exercise
+# the failure paths without needing a broken Solr (or any Solr at all).
+
+def _fake_solr_get(metrics_response=None):
+    """An AsyncClient.get that answers the core STATUS call with one healthy core and
+    /admin/metrics with metrics_response (a callable taking the request)."""
+    async def get(self, url, params=None, **kwargs):
+        request = httpx.Request("GET", url)
+        if url.endswith("/admin/metrics"):
+            return metrics_response(request)
+        return httpx.Response(200, request=request, json={
+            'status': {'name_lookup': {'startTime': '2026-01-01T00:00:00Z', 'index': {'numDocs': 1}}},
+        })
+    return get
+
+
+def test_status_reports_metrics_http_error(monkeypatch, caplog):
+    """A non-2xx from /admin/metrics is logged and reported, not mistaken for 'did not ask'."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(503, request=request, text="Solr is overloaded")))
+    client = TestClient(app)
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        response = client.get("/status", params={'full': 'true'})
+    assert response.status_code == 200
+    sm = response.json()['solr_metrics']
+    assert 'message' not in sm
+    assert '503' in sm['error']
+    assert any("/solr/admin/metrics" in r.getMessage() and "503" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_status_reports_metrics_exception(monkeypatch):
+    """An exception while reading the metrics is reported, not swallowed into the placeholder."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, text="not json")))
+    client = TestClient(app)
+    sm = client.get("/status", params={'full': 'true'}).json()['solr_metrics']
+    assert 'message' not in sm
+    assert 'Could not retrieve Solr metrics' in sm['error']
+
+
+def test_status_tolerates_non_numeric_gc_gauge(monkeypatch):
+    """One non-numeric gc.* gauge must not throw away every other metric."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {'solr.jvm': {
+            'gc.G1-Young-Generation.count': 3,
+            'gc.G1-Young-Generation.time': 40,
+            'gc.G1-Old-Generation.count': 'n/a',
+        }}})))
+    client = TestClient(app)
+    sm = client.get("/status", params={'full': 'true'}).json()['solr_metrics']
+    assert 'error' not in sm
+    assert sm['jvm']['gc_count'] == 3
+    assert sm['jvm']['gc_time_ms'] == 40
+
