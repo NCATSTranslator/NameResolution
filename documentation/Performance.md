@@ -61,7 +61,7 @@ The machine Solr runs on — use these to **size the Solr pod's CPU/memory reque
 |---|---|
 | `available_processors` | CPUs visible to Solr. |
 | `system_load_average` / `system_cpu_load` | Host-wide load and CPU (0.0–1.0). If `system_cpu_load` is higher than `jvm.cpu_load`, other processes are competing with Solr. |
-| `total_physical_mem_mb` | Host RAM. Because Solr mmaps its read-only index, RAM beyond the heap becomes OS page cache for the index, so the host wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. (Free physical memory is not reported: Solr's JVM exposes only Linux `MemFree`, which excludes page cache and reads near-zero on a healthy node.) |
+| `total_physical_mem_mb` | Host RAM. Because Solr mmaps its read-only index, RAM beyond the heap becomes OS page cache for the index, so the host wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. (Free physical memory is not reported: Solr's JVM exposes only Linux `MemFree`, which excludes page cache and reads near-zero on a healthy node. Nor is it read from `/proc/meminfo` by the NameRes API: that would describe the API pod's node, which is not necessarily Solr's. Page-cache stats need a node-level exporter on the Solr host — see #267.) |
 
 ### Caches (`solr_metrics.cache`)
 
@@ -200,6 +200,8 @@ Solr seems slow or the service is unresponsive
 | `SOLR_HOST` | `localhost` | Solr hostname |
 | `SOLR_PORT` | `8983` | Solr port |
 | `SOLR_CORE` | `name_lookup` | Solr core to query |
+| `SOLR_MAX_CONCURRENT_LOOKUPS` | `100` | Most Solr queries a single `/bulk-lookup` request keeps in flight (see [Deployment.md](./Deployment.md)) |
+| `SOLR_TIMEOUT_SECONDS` | `60` | Per-query Solr timeout, also applied to `/status`; `0` waits forever |
 | `RECENT_TIMES_COUNT` | `50000` | How many recent `/lookup` timings to retain for `recent_queries`. Lower it to reduce memory on low-traffic instances. |
 | `SLOW_QUERY_THRESHOLD_MS` | `500` | `/lookup` queries slower than this (end-to-end) are logged at WARNING |
 | `LOGLEVEL` | `INFO` | Set to `DEBUG` to log full Solr request/response JSON for every query |
