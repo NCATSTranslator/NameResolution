@@ -108,7 +108,9 @@ We are currently working on supporting
 
 ## Search endpoints
 
-The search endpoints allow you to search for concepts by a fragment of a name or synonym. These endpoints use Solr's extended Dismax query parser to search for matches across preferred names and synonyms, with support for highlighting, filtering, pagination, and debugging.
+The search endpoints allow you to search for concepts by a fragment of a name or synonym. By default these endpoints use Solr's extended Dismax query parser to search for matches across preferred names and synonyms, with support for highlighting, filtering, pagination, and debugging. Setting the `exact` parameter switches them to whole-string exact matching instead (see [Exact matching](#exact-matching)).
+
+The default search is *tokenized*, not *fuzzy*: your search string is broken into tokens, and a concept matches if its name or synonyms contain those tokens, in any order and not necessarily adjacent. Word order and adjacency are rewarded with a higher score rather than required, which is why `disease Parkinson` still finds `Parkinson disease`. What the default search does **not** do is tolerate misspellings: there is no edit-distance matching, so `parkinsen` finds nothing. (Solr's fuzzy `~` operator is escaped out of the query string along with the other special characters, so it cannot be requested either.) The one exception is `autocomplete=true`, which treats the *final* token as a prefix so that a half-typed word still matches.
 
 ### `/lookup`
 
@@ -118,7 +120,7 @@ Search for cliques by a fragment of a name or synonym.
 
 **Parameters:**
 
-- `string` (required, string): The string to search for.
+- `string` (required, string): The string to search for. Must be at least the configured minimum length (see `minimum_query_length` in [`/status`](#status), default 2) after leading/trailing whitespace is stripped; shorter queries are rejected with HTTP 422, in the same body shape as any other parameter validation failure. The minimum does not apply when [`exact`](#exact-matching) is set — exact matching is a single filter query rather than a tokenized search, and short labels such as the gene `T` are legitimate targets for it — but an empty string is rejected in every mode.
 - `autocomplete` (optional, boolean, default: false): If `true`, treats the input string as incomplete and looks for terms that start with the final word. If `false`, treats the entire phrase as complete (entity linker mode).
 - `highlighting` (optional, boolean, default: false): If `true`, returns information on which labels and synonyms matched the search query.
 - `offset` (optional, integer, default: 0, minimum: 0): The number of results to skip. Used for pagination.
@@ -128,6 +130,7 @@ Search for cliques by a fragment of a name or synonym.
 - `exclude_prefixes` (optional, string): Pipe-separated, case-sensitive list of CURIE prefixes to exclude (e.g., `UMLS|EFO`). Results with matching prefixes will be filtered out.
 - `only_taxa` (optional, string): Pipe-separated, case-sensitive list of taxa to filter to (e.g., `NCBITaxon:9606|NCBITaxon:10090|NCBITaxon:10116|NCBITaxon:7955`). Results without a specified taxon or with a matching taxon will be included.
 - `debug` (optional, string, one of: `none`, `query`, `timing`, `results`, `all`, default: `none`): Return debugging information from the underlying Solr query. See [Solr debug documentation](https://solr.apache.org/guide/solr/latest/query-guide/common-query-parameters.html#debug-parameter) for details.
+- `exact` (optional, string, one of: `label`, `synonyms`, `any`): Require the whole search string to match, instead of matching its tokens individually. See [Exact matching](#exact-matching) below. Omit for the default tokenized search.
 
 **Returns:** A list of `LookupResult` objects, each containing:
 - `curie`: The CURIE of the concept.
@@ -183,7 +186,8 @@ Search for cliques for multiple strings in a single request.
   "only_prefixes": "",
   "exclude_prefixes": "",
   "only_taxa": "",
-  "debug": "none"
+  "debug": "none",
+  "exact": null
 }
 ```
 
@@ -191,7 +195,7 @@ Search for cliques for multiple strings in a single request.
 - `strings` (required, list of strings): A list of strings to search for. The returned results will be in a dictionary with these values as keys.
 - All other parameters are optional and apply to all searches.
 
-**Returns:** A dictionary where each key is a string from the input `strings` array, and each value is a list of `LookupResult` objects (same structure as `/lookup` results).
+**Returns:** A dictionary where each key is a string from the input `strings` array, and each value is a list of `LookupResult` objects (same structure as `/lookup` results). Unlike `/lookup`, a string shorter than the configured minimum length (see `minimum_query_length` in [`/status`](#status), default 2) is not rejected: it simply maps to an empty list, so one too-short string does not fail the whole batch. An empty string, and a string shorter than the minimum in `exact` mode, are treated the same way.
 
 **Example request:**
 
@@ -230,6 +234,38 @@ POST `/bulk-lookup` with body:
 **Notes:**
 - This endpoint is useful for batch processing multiple queries at once, which can be more efficient than making multiple `/lookup` requests.
 - All results for a given string share the same filter and search parameters.
+- The individual lookups behind a single request are sent to Solr concurrently, up to a bounded number at a time (`SOLR_MAX_CONCURRENT_LOOKUPS`, default 100). Results are still returned keyed by the input string, so the response does not depend on the order in which they complete. Note that the bound applies per request, so the total number of queries this service has in flight against Solr is that limit multiplied by the number of bulk lookups being served at once.
+
+### Exact matching
+
+Both `/lookup` and `/bulk-lookup` accept an `exact` parameter, which replaces the default tokenized eDisMax search with whole-string matching against the `preferred_name_exactish` and `names_exactish` fields. These fields are indexed with a keyword tokenizer and a lowercase filter, so the *entire* string must match, but matching is case-insensitive. A search for `parkinson` will not match the label `parkinsonian disorder`, whereas `Parkinsonian Disorder` will.
+
+| `exact` | Matches against |
+| --- | --- |
+| `label` | The preferred name only (`preferred_name_exactish`). |
+| `synonyms` | The synonyms only (`names_exactish`). |
+| `any` | Either the preferred name or a synonym. |
+| *(omitted)* | Nothing changes: the usual tokenized eDisMax search is used. |
+
+Note that a concept's preferred name is not necessarily one of its synonyms, so `label` and `synonyms` can genuinely disagree. For example, HP:0001300 has the preferred name `parkinsonian disorder` and the single synonym `Parkinsonian disease`; searching for `parkinsonian disorder` with `exact=label` finds it, but with `exact=synonyms` it does not.
+
+Exact matching is implemented as a Solr filter query, which is cheaper than the equivalent tokenized search because there is nothing to score: no eDisMax parsing, no phrase or field boosts, just a term lookup against a field that holds each name as a single token. It is intended for callers such as named entity recognition pipelines that need to resolve large numbers of exact strings.
+
+That filter is deliberately marked uncached (`{!cache=false}`). Solr's filterCache is bounded by entry count rather than memory, and it holds the shared, reusable filters — `types:`, `taxa:`, `curie:` — that nearly every search benefits from. An exact-match clause is one distinct entry per distinct search string, so caching it would let a single bulk NER request evict the entire cache and slow down the ordinary search path, in exchange for a hit rate near zero on its own entries. Repeated *identical* exact lookups are still served from the queryResultCache, which caches the whole result and is bounded by RAM.
+
+Because there is no relevance score to rank by in exact mode, results are sorted by `clique_identifier_count` (descending) and then CURIE suffix (ascending), rather than by score. The `score` field is still present in each result, but it carries no ranking information.
+
+#### Exact matching and the other parameters
+
+- **`autocomplete` cannot be used with `exact`.** The two contradict each other — autocomplete treats the final word as an incomplete prefix, while exact requires the whole string to match — so the combination is rejected with a `400` rather than one of them being silently ignored.
+- **Typographic quotes are not rewritten in exact mode.** The default search folds `‘ ’ “ ”` to their ASCII equivalents, since input is sometimes mangled by Windows and the tokenizer discards the punctuation regardless. Exact mode deliberately does not: the `*_exactish` fields keep whatever characters Babel emitted, so rewriting the query would search for a string you did not type and would put any label containing a typographic quote out of reach. Search for the string exactly as it appears in the data.
+- **`highlighting` works, and always marks up the whole value.** Every match in exact mode is a whole-value match, so a highlighted result is the entire matching name wrapped in `<strong>`…`</strong>` — `parkinsonian disorder` matched with `exact=label` returns `{"labels": ["<strong>parkinsonian disorder</strong>"], "synonyms": []}`. The name is returned in its own capitalisation, not the query's, so a case-insensitive match is still visible as one.
+
+**Example:**
+
+```
+GET /lookup?string=parkinsonian%20disorder&exact=label
+```
 
 ## Lookup endpoints
 
@@ -312,7 +348,11 @@ Returns the status of the service. Most importantly, this returns the [Babel](ht
 version and changelog URL, which can be used to determine which version of Babel is currently loaded in this service.
 It also includes the NameRes version (also visible in the OpenAPI documentation)
 and the Biolink Model version used to build the Solr database, as well as bunch of information from the underlying
-Solr database.
+Solr database. The `config` object reports publicly-relevant configuration for this instance; currently just
+`minimum_query_length`, the shortest query (in characters, after whitespace is stripped) that `/lookup` and
+`/bulk-lookup` will search for in the default tokenized search. It defaults to 2 and can be set per deployment with the
+`NAMERES_MINIMUM_QUERY_LENGTH` environment variable. It does not constrain [exact matching](#exact-matching), which
+accepts any non-empty string.
 
 ```json
 {
@@ -326,6 +366,9 @@ Solr database.
     "download_url": "https://raw.githubusercontent.com/biolink/biolink-model/v4.2.6-rc5/biolink-model.yaml"
   },
   "nameres_version": "v1.5.1",
+  "config": {
+    "minimum_query_length": 2
+  },
   "startTime": "2025-12-19T11:53:09.638Z",
   "numDocs": 425583391,
   "maxDoc": 425586610,

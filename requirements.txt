@@ -1,5 +1,5 @@
 requests
-fastapi
+fastapi~=0.141.1
 httpx
 uvicorn
 pyyaml

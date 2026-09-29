@@ -4,4 +4,9 @@ __pycache__/
 data/
 
 # IntelliJ files
-/.idea/
+.idea/
+
+# Jupyter checkpoint directories, which Jupyter writes beside any notebook it
+# opens -- currently only documentation/, but the rule is left unanchored so it
+# also covers notebooks added elsewhere later.
+.ipynb_checkpoints/
