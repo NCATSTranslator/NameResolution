@@ -71,6 +71,7 @@ pip install -r requirements.txt
 - `SOLR_HOST` / `SOLR_PORT` - Solr connection (default: `localhost:8983`)
 - `SOLR_MAX_CONCURRENT_LOOKUPS` / `SOLR_TIMEOUT_SECONDS` - Bulk-lookup fan-out bound and Solr query timeout (see `documentation/Deployment.md`)
 - `NAMERES_MINIMUM_QUERY_LENGTH` - Shortest query `/lookup` and `/bulk-lookup` will search for (default: 2)
+- `RECENT_TIMES_COUNT` / `SLOW_QUERY_THRESHOLD_MS` - Size of the `/status` latency window (default 50000) and the `/lookup` time above which it logs at WARNING (default 500 ms); see `documentation/Performance.md`
 - `LOGLEVEL` - Logging level
 - `SERVER_ROOT` - API root path prefix
 - `MATURITY_VALUE` / `LOCATION_VALUE` - TRAPI metadata fields
@@ -81,7 +82,7 @@ pip install -r requirements.txt
 - `GET /reverse-lookup` - CURIE-to-names lookup
 - `POST /synonyms` - Get synonyms for a list of CURIEs
 - `POST /lookup-curies` - Filter existing CURIEs with type subsetting
-- `GET /status` - Health check with Solr document counts
+- `GET /status` - Health check with Solr document counts, plus recent-query latency. Pass `?full=true` for Solr/JVM/host metrics (adds a Solr round-trip, so the default path stays cheap for k8s probes).
 
 ### Data Model
 Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and biolink type information. Lookup results are `LookupResult` objects with scoring fields. Results are conflated using GeneProtein and DrugChemical conflation rules.
@@ -101,9 +102,11 @@ Solr documents contain: `curie`, `preferred_name`, `names` (synonym list), and b
 - **Query-side string normalization must not be applied to exact matching.** The `*_exactish` fields are a KeywordTokenizer plus a LowerCaseFilter and fold nothing else, so the smart-quote rewrite (and anything like it) would search for a string the caller never typed. The default path is unaffected because StandardTokenizer discards the punctuation anyway.
 - **The custom OpenAPI document must be installed by overriding `app.openapi`, not by assigning `app.openapi_schema`.** Since FastAPI 0.137.0, `openapi()` rebuilds the schema whenever the app's recorded routes version doesn't match the router's current one, and a schema assigned directly to the attribute never carries that stamp -- so FastAPI quietly overwrites it on the first request to `/openapi.json` and serves its default document, losing `info.x-translator` (which is what SmartAPI registration keys off), `contact`, `termsOfService`, `tags` and `servers`. It fails open, so nothing but the served spec shows it: that is how v1.7.0 shipped it (issue #294). `tests/test_openapi.py` pins this, and has to go through `TestClient` -- asserting on `construct_open_api_schema()` directly passes throughout the bug. `fastapi` is pinned in `requirements.txt` for the same reason.
 - **Declaring metadata in `openapi.yml` is not enough to serve it.** `construct_open_api_schema()` copies an explicit allowlist of `info` keys into the document (and `get_app_info()` a narrower one for the `FastAPI()` constructor); anything not named there is dropped without a word. That is how `info.contact` and `info.license` sat declared-but-unserved for years. Adding a key means adding it to the copy list *and* asserting it in `tests/test_openapi.py`.
+- **Check a new Solr `/admin/metrics` field against a live Solr before trusting it.** The encoding varies by metric type, and a wrong guess silently yields `null` rather than an error. Counters (`QUERY./select.requests`) are scalars, timers (`requestTimes`) and meters (`errors`/`timeouts`) are nested objects, and JVM gauges (`memory.heap.used`) come back as *flat dotted keys*, not a nested `memory.heap` map. `status()` reads them accordingly.
 
 ## Documentation
 - `documentation/API.md` - Endpoint reference
+- `documentation/Performance.md` - Reading the `/status` metrics; diagnosing Solr CPU/memory/load
 - `documentation/Deployment.md` - Docker/Kubernetes deployment guide
 - `documentation/Scoring.md` - Scoring algorithm details
 - `documentation/NameResolution.ipynb` - Interactive usage examples
