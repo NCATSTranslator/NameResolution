@@ -106,25 +106,34 @@ collected by the cluster log stack (Grafana) along with everything else the pod 
 Solr's **GC log** is separate: it is a JVM-level `-Xlog` sink that bypasses log4j2 entirely.
 Solr's default is to write it to `$SOLR_LOGS_DIR/solr_gc.log` (`/var/solr/logs`), which in our
 Helm chart is **not** on the Solr PVC — only `/var/solr/data` is mounted — so by default the GC
-log is ephemeral and is lost on exactly the pod restart that makes you want to read it. The
-chart therefore sets `GC_LOG_OPTS` to route GC logging to stdout instead:
+log is ephemeral and is lost on exactly the pod restart that makes you want to read it. Until
+then you can read it in place:
+
+```
+kubectl exec <solr-pod> -- tail -n 200 /var/solr/logs/solr_gc.log
+```
+
+To have it survive restarts, route GC logging to stdout by setting `GC_LOG_OPTS` on the Solr
+container:
 
 ```
 -Xlog:gc:stdout:time,uptime
 ```
 
-so GC lines land in the cluster log collector next to `solr.log`. Each collection prints one
-line with heap before/after and the pause duration, which is what you correlate against a
-latency tail:
+GC lines then land in the cluster log collector (Grafana) next to `solr.log`. The `name-lookup`
+chart does not set this yet; helxplatform/translator-devops#1044 adds it as the `solr.gc_log`
+value, and once that is deployed clearing `solr.gc_log` falls back to Solr's default file
+(rotating `solr_gc.log`, capped at 9 × 20 MB).
+
+Either way, each collection prints one line with heap before/after and the pause duration,
+which is what you correlate against a latency tail:
 
 ```
 [2026-07-24T03:07:11.367+0000][0.930s] GC(0) Pause Young (Normal) (G1 Evacuation Pause) 29M->4M(512M) 2.133ms
 ```
 
 Note this is `-Xlog:gc`, not `-Xlog:gc*` — the bare form is roughly an order of magnitude less
-chatty. Switch to `gc*` temporarily if you are debugging GC itself. If you need the GC log as a
-file instead, clear `solr.gc_log` in the chart's values to fall back to Solr's default
-(rotating `solr_gc.log`, capped at 9 × 20 MB).
+chatty. Switch to `gc*` temporarily if you are debugging GC itself.
 
 If GC logs are unavailable for any reason, `solr_metrics.jvm.gc_count` / `gc_time_ms` in
 `/status?full=true` give you the same signal in aggregate — sample them twice to get a rate.
@@ -179,8 +188,8 @@ Solr seems slow or the service is unresponsive
 └─ Step 5: Compare the two p99s to locate the tail, then check jvm.gc_time_ms
      │
      ├─ query_handler.p99_ms >> p50_ms (e.g. p50=50ms, p99=5000ms) with rising gc_time_ms
-     │    → Solr-side GC-pause signature. Confirm in the Solr pod's logs (GC lines go to
-     │      stdout, so they are in Grafana -- look for "Pause Young"/"Pause Full" durations
+     │    → Solr-side GC-pause signature. Confirm in the Solr GC log (see "Solr's own
+     │      logs" above for where it goes; look for "Pause Young"/"Pause Full" durations
      │      lining up with the slow window). Fix: tune GC_TUNE in the chart's values
      │      (-XX:+UseG1GC -XX:MaxGCPauseMillis=...).
      │
