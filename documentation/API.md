@@ -247,25 +247,96 @@ Both `/lookup` and `/bulk-lookup` accept an `exact` parameter, which replaces th
 | `any` | Either the preferred name or a synonym. |
 | *(omitted)* | Nothing changes: the usual tokenized eDisMax search is used. |
 
-Note that a concept's preferred name is not necessarily one of its synonyms, so `label` and `synonyms` can genuinely disagree. For example, HP:0001300 has the preferred name `parkinsonian disorder` and the single synonym `Parkinsonian disease`; searching for `parkinsonian disorder` with `exact=label` finds it, but with `exact=synonyms` it does not.
+The values are case-sensitive: anything other than `label`, `synonyms` or `any` (including `LABEL`) is rejected with a `422`, in the same shape as any other parameter validation failure.
+
+`label` and `synonyms` differ whenever a name is a synonym but not the preferred name. MONDO:0021095, preferred name `parkinsonian disorder`, has `Parkinsonian disease` among its synonyms, so (matching being case-insensitive):
+
+```
+GET /lookup?string=Parkinsonian%20Disease&exact=synonyms    → MONDO:0021095
+GET /lookup?string=Parkinsonian%20Disease&exact=label       → []
+```
+
+In Babel's output the preferred name is normally one of the synonyms too (it was for all of about 2,500 results sampled from Babel 2026jul22), so in practice `synonyms` finds nearly everything `label` does, and `any` is close to `synonyms`. Use `label` when the string should be the name Babel chose for the concept rather than any of its names. The two modes can disagree in the other direction too: in the test dataset HP:0001300 has the preferred name `parkinsonian disorder` and the single synonym `Parkinsonian disease`, so `parkinsonian disorder` is found with `exact=label` but not with `exact=synonyms` (see `tests/test_exact_mode.py`).
+
+#### What has to match
+
+Exact mode strips leading and trailing whitespace from the search string and ignores case. Nothing else is normalized. Every other character has to match a name as Babel emitted it:
+
+| Search string (`exact=any`) | Finds MONDO:0021095 or MONDO:0008685? | Why |
+| --- | --- | --- |
+| `  PARKINSONIAN DISORDER  ` | Yes | Case and outer whitespace are ignored. |
+| `parkinsonian` | No | A prefix of a name is not the name. |
+| `disorder parkinsonian` | No | Word order matters. |
+| `parkinsonian  disorder` | No | Internal whitespace is not collapsed. |
+| `parkinsonian-disorder` | No | Punctuation is not folded. |
+| `Wolff-Parkinson-White syndrome` | Yes | The preferred name of MONDO:0008685, hyphens included. |
+| `Wolff Parkinson White syndrome` | Yes, with `synonyms` or `any` only | A synonym spelled without the hyphens; not the preferred name. |
+
+The default search returns the expected concept first for every one of these strings. That is the difference between the two: the default search is built to find the concept a string probably means, and exact mode to confirm that it is a concept's name.
+
+#### Ranking, and why filters matter more
+
+Because there is no relevance score to rank by in exact mode, results are sorted by `clique_identifier_count` (descending) and then CURIE suffix (ascending), rather than by score. The `score` field is still present in each result, but it carries no ranking information.
+
+A single string is often the exact name of several cliques, and ranking by clique size does not put the one you meant first. `diabetes` with `exact=any` returns type 2 diabetes mellitus (MONDO:0005148), diabetes mellitus (MONDO:0005015), and the mouse gene *Lepr* (NCBIGene:16847), which has `diabetes` as a synonym. `Interleukin-2` returns 273 results, starting with the pig and then the human *IL2* gene. The usual filters apply in exact mode, and are the way to choose between these:
+
+```
+GET /lookup?string=diabetes&exact=any&biolink_type=Disease          → MONDO:0005148, MONDO:0005015
+GET /lookup?string=Interleukin-2&exact=any&only_taxa=NCBITaxon:9606  → NCBIGene:3558 (human IL2) first
+```
+
+`offset` and `limit` page through the results as usual. If you need a particular clique that a filter cannot select, ask for a larger `limit` (up to 1000): exact lookups are cheap, and a small clique can come after hundreds of larger ones with the same name.
+
+#### Performance
 
 Exact matching is implemented as a Solr filter query, which is cheaper than the equivalent tokenized search because there is nothing to score: no eDisMax parsing, no phrase or field boosts, just a term lookup against a field that holds each name as a single token. It is intended for callers such as named entity recognition pipelines that need to resolve large numbers of exact strings.
 
 That filter is deliberately marked uncached (`{!cache=false}`). Solr's filterCache is bounded by entry count rather than memory, and it holds the shared, reusable filters — `types:`, `taxa:`, `curie:` — that nearly every search benefits from. An exact-match clause is one distinct entry per distinct search string, so caching it would let a single bulk NER request evict the entire cache and slow down the ordinary search path, in exchange for a hit rate near zero on its own entries. Repeated *identical* exact lookups are still served from the queryResultCache, which caches the whole result and is bounded by RAM.
 
-Because there is no relevance score to rank by in exact mode, results are sorted by `clique_identifier_count` (descending) and then CURIE suffix (ascending), rather than by score. The `score` field is still present in each result, but it carries no ranking information.
-
 #### Exact matching and the other parameters
 
 - **`autocomplete` cannot be used with `exact`.** The two contradict each other — autocomplete treats the final word as an incomplete prefix, while exact requires the whole string to match — so the combination is rejected with a `400` rather than one of them being silently ignored.
-- **Typographic quotes are not rewritten in exact mode.** The default search folds `‘ ’ “ ”` to their ASCII equivalents, since input is sometimes mangled by Windows and the tokenizer discards the punctuation regardless. Exact mode deliberately does not: the `*_exactish` fields keep whatever characters Babel emitted, so rewriting the query would search for a string you did not type and would put any label containing a typographic quote out of reach. Search for the string exactly as it appears in the data.
-- **`highlighting` works, and always marks up the whole value.** Every match in exact mode is a whole-value match, so a highlighted result is the entire matching name wrapped in `<strong>`…`</strong>` — `parkinsonian disorder` matched with `exact=label` returns `{"labels": ["<strong>parkinsonian disorder</strong>"], "synonyms": []}`. The name is returned in its own capitalisation, not the query's, so a case-insensitive match is still visible as one.
+- **There is no minimum length, but an empty string is still rejected.** Single-character names are real targets: `T` with `exact=any` finds threonine (CHEBI:16857) and thymidine (CHEBI:17748), among others. An empty or whitespace-only string is a `422` from `/lookup`, and maps to an empty list in `/bulk-lookup`.
+- **Typographic quotes are not rewritten in exact mode.** The default search folds `‘ ’ “ ”` to their ASCII equivalents, since input is sometimes mangled by Windows and the tokenizer discards the punctuation regardless. Exact mode deliberately does not: the `*_exactish` fields keep whatever characters Babel emitted, so rewriting the query would search for a string you did not type and would put any label containing a typographic quote out of reach. Search for the string exactly as it appears in the data. `Alzheimer's disease` (ASCII apostrophe) with `exact=synonyms` finds MONDO:0004975, but `Alzheimer’s disease` finds nothing.
+- **`highlighting` works, and always marks up the whole value.** Every match in exact mode is a whole-value match, so a highlighted result is the entire matching name wrapped in `<strong>`…`</strong>`, and only the fields the mode searched are highlighted. `Parkinsonian Disease` matched with `exact=synonyms` returns `{"labels": [], "synonyms": ["<strong>Parkinsonian disease</strong>", "<strong>parkinsonian disease</strong>"]}` for MONDO:0021095. The name is returned in its own capitalisation, not the query's, so a case-insensitive match is still visible as one.
 
-**Example:**
+**Examples:**
 
 ```
 GET /lookup?string=parkinsonian%20disorder&exact=label
 ```
+
+POST `/bulk-lookup` with body:
+
+```json
+{
+  "strings": ["Parkinsonian Disease", "parkinson", ""],
+  "exact": "any",
+  "limit": 2
+}
+```
+
+returns every input string as a key, with an empty list for strings that are not the whole of any name:
+
+```json
+{
+  "Parkinsonian Disease": [
+    {
+      "curie": "MONDO:0021095",
+      "label": "parkinsonian disorder",
+      "synonyms": ["PARKINSONISM", "Parkinsonism", ..., "Parkinsonian disease", ...],
+      "score": 1.0,
+      "clique_identifier_count": 10,
+      "types": ["biolink:Disease", ...],
+      ...
+    }
+  ],
+  "parkinson": [],
+  "": []
+}
+```
+
+These examples were checked against NameRes v1.7.1 with Babel 2026jul22. A later Babel release can change which cliques a name belongs to and how large they are.
 
 ## Lookup endpoints
 
