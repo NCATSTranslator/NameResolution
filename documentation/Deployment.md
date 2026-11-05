@@ -91,7 +91,12 @@ $ bash main.sh
 
 ### Kubernetes
 
-Helm charts can be found at https://github.com/helxplatform/translator-devops/helm/name-lookup.
+The `name-lookup` Helm chart in translator-devops deploys Solr and NameRes together:
+https://github.com/helxplatform/translator-devops/tree/develop/helm/name-lookup
+
+Point its `dataUrl` value at a backup built by [data-loading](../data-loading/README.md)
+and the chart downloads and extracts it into the Solr volume. The chart's README covers
+installing, checking the load, and locking the data in place afterwards.
 
 ## examples
 
