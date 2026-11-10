@@ -70,8 +70,8 @@ def test_status_shape():
     assert set(rq) == {'window_size', 'requests', 'errors', 'timeouts', 'cancelled',
                        'lookup_ms', 'solr_round_trip_ms'}
     # Grouped by what they time, so the names say which span each figure covers.
-    assert set(rq['lookup_ms']) == {'mean', 'min', 'max', 'p50', 'p95', 'p99'}
-    assert set(rq['solr_round_trip_ms']) == {'mean'}
+    for span in ('lookup_ms', 'solr_round_trip_ms'):
+        assert set(rq[span]) == {'mean', 'min', 'max', 'p50', 'p95', 'p99'}, span
 
     # Solr's health metrics are an extra round-trip, so they appear only with ?full=true.
     # They live under 'solr' -- never at the top level, as solr_metrics once did.
@@ -171,7 +171,10 @@ def test_status_recent_queries_populated():
     for field, value in rq['lookup_ms'].items():
         assert value is not None, field
     assert rq['lookup_ms']['min'] <= rq['lookup_ms']['p50'] <= rq['lookup_ms']['max']
-    assert rq['solr_round_trip_ms']['mean'] is not None
+    for field, value in rq['solr_round_trip_ms'].items():
+        assert value is not None, field
+    # The round trip is part of the lookup, so it can't be the slower of the two.
+    assert rq['solr_round_trip_ms']['max'] <= rq['lookup_ms']['max']
 
 
 def test_slow_query_logs_warning(monkeypatch, caplog):
@@ -455,6 +458,9 @@ def test_recent_lookups_window():
     assert summary['lookup_ms']['p50'] == 3.0
     # min and max are of what is in the window: the evicted 1 ms lookup is gone.
     assert summary['lookup_ms']['min'] == 2.0 and summary['lookup_ms']['max'] == 6.0
+    # The round trip has its own order statistics, from its own times.
+    round_trip = summary['solr_round_trip_ms']
+    assert (round_trip['min'], round_trip['p50'], round_trip['max']) == (0.5, 1.0, 2.0)
 
     window.record(1_000_000, 0)   # evicts the timeout
     assert window.summary()['timeouts'] == 0
@@ -504,7 +510,7 @@ def test_recent_lookups_window_of_zero_keeps_nothing():
     summary = window.summary()
     assert summary['requests'] == 0
     assert all(value is None for value in summary['lookup_ms'].values())
-    assert summary['solr_round_trip_ms']['mean'] is None
+    assert all(value is None for value in summary['solr_round_trip_ms'].values())
 
 
 @pytest.mark.parametrize("raw", ["50k", "-1", "", "nan"])
