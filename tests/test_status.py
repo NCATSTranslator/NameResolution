@@ -94,8 +94,15 @@ def test_status_reports_solr_last():
 
 
 def test_status_metrics_param():
-    """With ?full=true, Solr's health metrics are added to `solr`, with the expected structure."""
+    """With ?full=true, Solr's health metrics are added to `solr`, read from Solr rather
+    than left null.
+
+    A wrong metric name or encoding yields null, not an error, so a check that a key is
+    present proves nothing (see CLAUDE.md); each field is checked for a value.
+    """
     client = TestClient(app)
+    # Make sure the core has served at least one /select to report on.
+    client.get("/lookup", params={'string': 'alzheimer'})
     response = client.get("/status", params={'full': 'true'})
     assert response.status_code == 200
     data = response.json()
@@ -107,16 +114,26 @@ def test_status_metrics_param():
     assert 'metrics_error' not in solr, solr['metrics_error']
     # The core's own stats are still there alongside the metrics.
     assert solr['numDocs'] == 89
-    assert 'requests' in solr['queries']
+
+    queries = solr['queries']
+    assert isinstance(queries['requests'], int) and queries['requests'] > 0
+    # errors/timeouts are meters in Solr; we report just their counts.
+    assert isinstance(queries['errors'], int)
+    assert isinstance(queries['timeouts'], int)
+    for field in ('mean_ms', 'p50_ms', 'p95_ms', 'p99_ms'):
+        assert isinstance(queries[field], (int, float)), field
+
+    # The cache values are checked in test_status_reports_cache_metrics.
     assert 'filterCache' in solr['cache'] and 'queryResultCache' in solr['cache']
-    assert 'hitratio' in solr['cache']['filterCache']
-    assert 'heap_used_pct' in solr['jvm']
-    # GC and OS resource fields drive Solr pod sizing decisions.
-    assert 'gc_count' in solr['jvm'] and 'gc_time_ms' in solr['jvm']
+
+    jvm = solr['jvm']
+    assert jvm['heap_used_mb'] > 0 and jvm['heap_max_mb'] > 0
+    assert 0 < jvm['heap_used_pct'] <= 100
+    # GC and OS resource fields drive Solr pod sizing decisions. A Solr that has loaded an
+    # index has collected garbage; a gc_count of 0 means the gc.* names were misread.
+    assert jvm['gc_count'] > 0 and jvm['gc_time_ms'] >= 0
     assert isinstance(solr['os']['available_processors'], int)
     assert solr['os']['total_physical_mem_mb'] > 0
-    # errors/timeouts should be scalar counts (or None), not nested meter dicts.
-    assert not isinstance(solr['queries']['errors'], dict)
 
 
 def test_status_reports_cache_metrics():
@@ -217,11 +234,14 @@ def test_status_reports_metrics_exception(monkeypatch):
 def test_status_tolerates_non_numeric_gc_gauge(monkeypatch):
     """One non-numeric gc.* gauge must not throw away every other metric."""
     monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
-        lambda request: httpx.Response(200, request=request, json={'metrics': {'solr.jvm': {
-            'gc.G1-Young-Generation.count': 3,
-            'gc.G1-Young-Generation.time': 40,
-            'gc.G1-Old-Generation.count': 'n/a',
-        }}})))
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.name_lookup': {'QUERY./select.requests': 1},
+            'solr.jvm': {
+                'gc.G1-Young-Generation.count': 3,
+                'gc.G1-Young-Generation.time': 40,
+                'gc.G1-Old-Generation.count': 'n/a',
+            },
+        }})))
     client = TestClient(app)
     solr = client.get("/status", params={'full': 'true'}).json()['solr']
     assert 'metrics_error' not in solr
@@ -291,3 +311,72 @@ def test_failed_lookup_is_recorded(monkeypatch, caplog, failure, outcome):
     assert after['requests'] == min(before['requests'] + 1, after['window_size'])
     assert any(r.levelno == logging.WARNING and f"FAILED QUERY ({outcome}" in r.getMessage()
                for r in caplog.records)
+
+
+def test_status_tolerates_unexpected_metric_values(monkeypatch):
+    """An unexpected value costs only its own field, not every block: a non-numeric heap
+    maximum once raised a TypeError that threw away the query, cache and OS figures too."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.name_lookup': {
+                'QUERY./select.requests': 42,
+                'QUERY./select.requestTimes': 'not a timer',
+                'CACHE.searcher.filterCache': {'lookups': 9, 'hitratio': 'n/a'},
+            },
+            'solr.jvm': {
+                'memory.heap.used': 1_048_576,
+                'memory.heap.max': {'unexpected': 'shape'},
+                'os.availableProcessors': 4,
+            },
+        }})))
+    client = TestClient(app)
+    solr = client.get("/status", params={'full': 'true'}).json()['solr']
+    assert 'metrics_error' not in solr
+    assert solr['queries']['requests'] == 42
+    assert solr['queries']['mean_ms'] is None
+    assert solr['cache']['filterCache']['lookups'] == 9
+    assert solr['cache']['filterCache']['hitratio'] is None
+    assert solr['jvm']['heap_used_mb'] == 1.0
+    assert solr['jvm']['heap_max_mb'] is None and solr['jvm']['heap_used_pct'] is None
+    assert solr['os']['available_processors'] == 4
+
+
+# What a SolrCloud core looks like in core STATUS (as Solr 9.10 in cloud mode reports it):
+# its metrics registry is solr.core.<collection>.<shard>.<replica>, with the replica taken
+# from the core name, not the cloud descriptor's `replica`.
+CLOUD_CORES = {'name_lookup_shard1_replica_n1': {
+    'cloud': {'collection': 'name_lookup', 'shard': 'shard1', 'replica': 'core_node2'},
+    'index': {'numDocs': 1},
+}}
+
+
+def test_status_reads_metrics_of_a_cloud_mode_core(monkeypatch):
+    """The single-core fallback exists for cloud-mode cores, whose metrics registry has
+    dots where the core name has underscores; reading solr.core.<coreName> found nothing
+    and reported every query and cache field as null."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.name_lookup.shard1.replica_n1': {'QUERY./select.requests': 7},
+            'solr.jvm': {},
+        }}), cores=CLOUD_CORES))
+    client = TestClient(app)
+    solr = client.get("/status", params={'full': 'true'}).json()['solr']
+    assert solr['core'] == 'name_lookup_shard1_replica_n1'
+    assert 'metrics_error' not in solr
+    assert solr['queries']['requests'] == 7
+
+
+def test_status_reports_missing_core_metrics(monkeypatch):
+    """If the core's metrics registry can't be found, say so instead of returning nulls --
+    and don't borrow another core's registry -- while still reporting the JVM's figures."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.some_other_core': {'QUERY./select.requests': 7},
+            'solr.jvm': {'os.availableProcessors': 4},
+        }})))
+    client = TestClient(app)
+    solr = client.get("/status", params={'full': 'true'}).json()['solr']
+    assert 'name_lookup' in solr['metrics_error']
+    assert 'queries' not in solr and 'cache' not in solr
+    assert solr['os']['available_processors'] == 4
+
