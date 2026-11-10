@@ -44,11 +44,12 @@ client and connection per query, that overhead took a 1 ms query on a local Solr
 | `lookup_ms.p50` / `p95` / `p99` | Lookup-time percentiles over the window. Comparing them against `solr.queries.handler_ms` helps localize a latency tail, but it's a pointer, not proof: the two cover different traffic and periods, and these include failures (see Step 5 of the decision tree). |
 | `solr_round_trip_ms` | The same six values for the part of each lookup spent on the Solr request. Matches the "for the Solr round trip" figure in the log line. A `p99` or `max` well above `solr.queries.handler_ms`' points at a tail in the connection, network or transfer rather than in Solr. |
 | `requests` / `window_size` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). Unlike `solr.queries.requests`, `requests` is windowed, not cumulative, so the two can't be compared. |
-| `errors` / `timeouts` / `cancelled` | Queries in the window that failed: `timeouts` hit `SOLR_TIMEOUT_SECONDS`, `cancelled` were abandoned while waiting on Solr (a server shutdown, say), and `errors` are the rest (Solr returned an error or couldn't be reached). They are disjoint, so their sum is every failure. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `lookup_ms.p99` and `max` too. |
+| `errors` / `timeouts` / `cancelled` | Queries in the window that failed: `timeouts` hit `SOLR_TIMEOUT_SECONDS`, `cancelled` were abandoned while waiting on Solr (a server shutdown, say), and `errors` are the rest (Solr returned an error or couldn't be reached, or NameRes couldn't build results from its answer). They are disjoint, so their sum is every failure. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `lookup_ms.p99` and `max` too. |
 
-The means are running totals and always current. `min`, `max` and the percentiles need a sort of
-the whole window, so `/status` reuses them for up to 10 seconds; the percentiles need at least
-two lookups in the window.
+The counts (`requests`, `errors`, `timeouts`, `cancelled`) are always current. The latency
+figures need a sort of the whole window, so `/status` reuses them for up to 10 seconds; each of
+`lookup_ms` and `solr_round_trip_ms` is computed in one pass, so its `mean` always lies between its
+`min` and `max`. The percentiles need at least two lookups in the window.
 
 ### Solr queries (`solr.queries`)
 
@@ -81,7 +82,7 @@ rather than Solr's lifetime.
 | `heap_used_pct` | Percentage of JVM heap in use (0–100). **> 80 = memory pressure.** |
 | `heap_used_mb` / `heap_max_mb` | Absolute heap figures. Max is set by `-Xmx` in Solr's JVM config (`SOLR_JAVA_MEM`). |
 | `cpu_load` | Solr process CPU (0.0–1.0). **> 0.80 = CPU saturation.** |
-| `gc_count` / `gc_time_ms` | Cumulative garbage-collection pause count and total pause time across all collectors. Rising `gc_time_ms` relative to uptime = heap pressure (and a source of `handler_ms.p99` spikes). |
+| `gc_count` / `gc_time_ms` | Cumulative garbage-collection pause count and total pause time across all collectors. Collectors that time concurrent work rather than pauses (G1's `G1 Concurrent GC` on JDK 20+, ZGC's and Shenandoah's `… Cycles`) are left out. Rising `gc_time_ms` relative to uptime = heap pressure (and a source of `handler_ms.p99` spikes). |
 
 ### OS resources (`solr.os`)
 
@@ -134,10 +135,19 @@ anything parsing these lines should accept both.
 
 A lookup that fails instead logs at WARNING with the outcome (`timeout`, `cancelled` or `error`)
 and the exception type, before the exception is re-raised (and, unless it was cancelled, becomes
-an HTTP 500). Bulk strings that fail are logged this way too:
+an HTTP 500):
 
 ```
 WARNING: FAILED QUERY (timeout: ReadTimeout): Lookup query to Solr for "..." ...: failed after 60012.40ms
+```
+
+The strings of a `/bulk-lookup` log the same line at INFO. The first string to fail fails the
+whole request, so NameRes cancels the strings still running or waiting (they log as `cancelled`)
+rather than send each of them to a Solr that is likely down, and logs a single warning for the
+request:
+
+```
+WARNING: FAILED BULK QUERY (ConnectError): Bulk lookup query for 5000 strings (...): 1 failed, and those not yet done were cancelled, after 12.30ms
 ```
 
 Key interpretation:

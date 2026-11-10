@@ -274,6 +274,31 @@ def test_status_reports_missing_gc_metrics_as_null(monkeypatch):
     assert jvm['gc_count'] is None and jvm['gc_time_ms'] is None
 
 
+@pytest.mark.parametrize("gauges, count, time_ms", [
+    # G1 on JDK 20+: the concurrent bean times marking that runs beside the application.
+    ({'gc.G1-Young-Generation.count': 8, 'gc.G1-Young-Generation.time': 36,
+      'gc.G1-Old-Generation.count': 1, 'gc.G1-Old-Generation.time': 4,
+      'gc.G1-Concurrent-GC.count': 5, 'gc.G1-Concurrent-GC.time': 900}, 9, 40),
+    # ZGC, and generational ZGC: the Cycles beans are concurrent, the Pauses beans aren't.
+    ({'gc.ZGC-Cycles.count': 3, 'gc.ZGC-Cycles.time': 700,
+      'gc.ZGC-Pauses.count': 9, 'gc.ZGC-Pauses.time': 2}, 9, 2),
+    ({'gc.ZGC-Minor-Cycles.time': 500, 'gc.ZGC-Minor-Pauses.time': 1,
+      'gc.ZGC-Major-Cycles.time': 800, 'gc.ZGC-Major-Pauses.time': 3}, None, 4),
+    ({'gc.Shenandoah-Cycles.time': 600, 'gc.Shenandoah-Pauses.time': 5}, None, 5),
+])
+def test_status_gc_totals_count_only_pauses(monkeypatch, gauges, count, time_ms):
+    """gc_count and gc_time_ms are pause totals, so the beans that time concurrent GC work
+    are left out (bean names as a Temurin 21 JVM reports them)."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.name_lookup': {},
+            'solr.jvm': gauges,
+        }})))
+    client = TestClient(app)
+    jvm = client.get("/status", params={'full': 'true'}).json()['solr']['jvm']
+    assert jvm['gc_count'] == count and jvm['gc_time_ms'] == time_ms
+
+
 # Two cores, neither of them name_lookup, so the single-core fallback can't rescue it and
 # status() takes its error branch.
 MISPOINTED_CORES = {'other_a': {}, 'other_b': {}}
@@ -338,6 +363,27 @@ def test_failed_lookup_is_recorded(monkeypatch, caplog, failure, outcome):
                for r in caplog.records)
 
 
+def test_lookup_failing_after_solr_answered_is_recorded(monkeypatch, caplog):
+    """A lookup that fails while building its results, after Solr has answered, is a 500 to
+    its caller like any other failure, so it must count in recent_queries.errors too."""
+    async def unexpected_doc_post(self, url, **kwargs):
+        # A document with no `id` can't be matched up with its highlighting.
+        return httpx.Response(200, json={'response': {'docs': [{'curie': 'MONDO:0004975'}]}})
+    monkeypatch.setattr(httpx.AsyncClient, "post", unexpected_doc_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get())
+    client = TestClient(app, raise_server_exceptions=False)
+
+    before = client.get("/status").json()['recent_queries']
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        assert client.get("/lookup", params={'string': 'alzheimer'}).status_code == 500
+    after = client.get("/status").json()['recent_queries']
+
+    assert after['errors'] == before['errors'] + 1
+    assert after['requests'] == min(before['requests'] + 1, after['window_size'])
+    assert any(r.levelno == logging.WARNING and "FAILED QUERY (error: KeyError)" in r.getMessage()
+               for r in caplog.records)
+
+
 def test_status_tolerates_unexpected_metric_values(monkeypatch):
     """An unexpected value costs only its own field, not every block: a non-numeric heap
     maximum once raised a TypeError that threw away the query, cache and OS figures too."""
@@ -364,6 +410,21 @@ def test_status_tolerates_unexpected_metric_values(monkeypatch):
     assert solr['jvm']['heap_used_mb'] == 1.0
     assert solr['jvm']['heap_max_mb'] is None and solr['jvm']['heap_used_pct'] is None
     assert solr['os']['available_processors'] == 4
+
+
+@pytest.mark.parametrize("heap_max", [-1, 0])
+def test_status_reports_undefined_heap_max_as_null(monkeypatch, heap_max):
+    """The JVM reports a heap with no defined maximum as -1, which is unknown: it must not
+    come out as a negative heap_max_mb or heap_used_pct (or, at 0, a ZeroDivisionError)."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.name_lookup': {},
+            'solr.jvm': {'memory.heap.used': 1_048_576, 'memory.heap.max': heap_max},
+        }})))
+    client = TestClient(app)
+    jvm = client.get("/status", params={'full': 'true'}).json()['solr']['jvm']
+    assert jvm['heap_used_mb'] == 1.0
+    assert jvm['heap_max_mb'] is None and jvm['heap_used_pct'] is None
 
 
 # What a SolrCloud core looks like in core STATUS (as Solr 9.10 in cloud mode reports it):
@@ -424,6 +485,35 @@ def test_bulk_lookup_is_not_in_recent_queries(monkeypatch, caplog):
     assert not any("SLOW QUERY" in r.getMessage() for r in caplog.records)
 
 
+def test_failed_bulk_lookup_warns_once_and_cancels_the_rest(monkeypatch, caplog):
+    """A bulk request against a failing Solr logs one warning, not one per string, and
+    stops sending its remaining strings to Solr once the request has failed."""
+    import api.server
+    calls = []
+
+    async def first_fails_then_hangs(self, url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            raise httpx.ConnectError("connection refused")
+        await asyncio.Event().wait()   # Never answers: only cancellation ends it.
+    monkeypatch.setattr(httpx.AsyncClient, "post", first_fails_then_hangs)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    strings = [f"string {i}" for i in range(3 * api.server.config.solr_max_concurrent_lookups)]
+    with caplog.at_level(logging.INFO, logger="api.server"):
+        assert client.post("/bulk-lookup", json={'strings': strings}).status_code == 500
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].startswith(f"FAILED BULK QUERY (ConnectError): Bulk lookup query for {len(strings)} strings")
+    assert "1 failed" in warnings[0]
+    # The strings that were waiting on Solr when the request failed were cancelled, and
+    # those still waiting for a slot never reached it.
+    assert any("FAILED QUERY (cancelled" in r.getMessage() and r.levelno == logging.INFO
+               for r in caplog.records)
+    assert len(calls) <= api.server.config.solr_max_concurrent_lookups + 1
+
+
 def test_cancelled_lookup_is_recorded(monkeypatch, caplog):
     """A lookup cancelled while it waits on Solr is timed and counted as `cancelled`.
     CancelledError is a BaseException, which an `except Exception` lets past."""
@@ -444,7 +534,8 @@ def test_cancelled_lookup_is_recorded(monkeypatch, caplog):
 
 
 def test_recent_lookups_window():
-    """The running totals stay exact as entries are evicted, and match a recomputation."""
+    """The counts stay exact as entries are evicted, and every figure is of what the
+    window holds now."""
     from api.server import RecentLookups
     window = RecentLookups(3)
     window.record(1_000_000, 500_000)
@@ -468,8 +559,9 @@ def test_recent_lookups_window():
 
 
 def test_recent_lookups_percentiles_are_cached(monkeypatch):
-    """The min, max and percentiles cost a sort of the whole window, so /status reuses them
-    for up to PERCENTILE_CACHE_SECONDS rather than re-sorting on every probe."""
+    """The latency figures cost a sort of the whole window, so /status reuses them for up
+    to PERCENTILE_CACHE_SECONDS rather than re-sorting on every probe. A series' mean is
+    cached with its min and max, so that the three always agree."""
     import api.server
     clock = [1000.0]
     monkeypatch.setattr(api.server.time, "monotonic", lambda: clock[0])
@@ -486,11 +578,14 @@ def test_recent_lookups_percentiles_are_cached(monkeypatch):
     window.record(100_000_000, 0)
     cached = window.summary()
     assert cached['lookup_ms']['p50'] == 1.0 and cached['lookup_ms']['max'] == 1.0   # still cached
-    assert cached['requests'] == 4 and cached['lookup_ms']['mean'] == 50.5   # but totals are current
+    # The mean is from the same moment as the max: a current mean of 50.5 beside a cached
+    # max of 1.0 is what this used to report.
+    assert cached['lookup_ms']['mean'] == 1.0
+    assert cached['requests'] == 4   # but the counts are current
 
     clock[0] += api.server.PERCENTILE_CACHE_SECONDS
     fresh = window.summary()['lookup_ms']
-    assert fresh['p50'] == 50.5 and fresh['max'] == 100.0
+    assert fresh['p50'] == 50.5 and fresh['max'] == 100.0 and fresh['mean'] == 50.5
 
 
 def test_recent_lookups_percentiles_stay_within_observed_times():
@@ -573,7 +668,8 @@ def test_shared_solr_client_is_reused_and_closed_on_shutdown(monkeypatch):
 
 
 # The lookup log line is parsed downstream (TranslatorSRI/babel-validation's NameRes log
-# analysis), so its shape is an interface. Change this pattern only with that parser.
+# analysis, its PR #107: LOOKUP_LINE_RE in log-analysis/nameres/analyze_nameres_logs.py), so
+# its shape is an interface. Change this pattern only with that parser.
 LOOKUP_LOG_LINE = re.compile(
     r'^Lookup query to Solr for "alzheimer" \(autocomplete=False, .*\): '
     r'took (?P<took>[\d.]+)ms \(with (?P<solr>[\d.]+)ms for the Solr round trip\)$')

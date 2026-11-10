@@ -163,8 +163,8 @@ def diagnostic_setting(name: str, default, parse):
 DEFAULT_RECENT_TIMES_COUNT = 50000
 RECENT_TIMES_COUNT = diagnostic_setting("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_COUNT, int)
 
-# How long /status may reuse the latency min, max and percentiles it last computed; see
-# RecentLookups.summary().
+# How long /status may reuse the latency figures (mean, min, max and percentiles) it last
+# computed; see RecentLookups.summary().
 PERCENTILE_CACHE_SECONDS = 10
 
 
@@ -173,12 +173,17 @@ class RecentLookups:
     The last `maxlen` /lookup timings and outcomes, which /status reports as recent_queries.
 
     /status is what the Kubernetes probes call, so it has to stay cheap however full the
-    window is. The counts and means are therefore running totals, updated as each entry is
-    added and evicted, rather than a pass over the window per request. Times are kept as
-    integer nanoseconds, so that those totals don't drift however many entries pass
-    through. The min, max and percentiles need a sort of the whole window (a few ms at
-    50000 entries, on the event loop, for each of the two series), so summary() reuses the
-    last ones for up to PERCENTILE_CACHE_SECONDS.
+    window is. The counts are therefore running totals, updated as each entry is added and
+    evicted, rather than a pass over the window per request. The latency figures need a
+    sort of the whole window (a few ms at 50000 entries, on the event loop, for each of the
+    two series), so summary() reuses the last ones for up to PERCENTILE_CACHE_SECONDS.
+
+    A series' mean is computed in the same pass as its min, max and percentiles, though a
+    running total could keep it current: a current mean beside a min and max up to 10 s old
+    reported a mean above the max after a burst of slow lookups, and figures that disagree
+    with each other read as broken just when latency is rising. So each series' figures
+    describe one moment, while the counts are current. Times are integer nanoseconds, so a
+    mean is an exact sum however many entries pass through.
 
     Everything here runs on the event loop with no await, so it needs no lock.
     """
@@ -188,8 +193,6 @@ class RecentLookups:
         # (total_ns, solr_ns, outcome) per lookup, oldest first. Evicted by hand, not by
         # deque(maxlen=...), so that the totals below can subtract what leaves.
         self._entries = deque()
-        self._total_ns = 0
-        self._solr_ns = 0
         self._outcomes = Counter()
         # Lookups ever recorded: tells summary() whether its cached order statistics are stale.
         self._recorded = 0
@@ -198,15 +201,16 @@ class RecentLookups:
         self._order_stats_recorded = 0
         self._order_stats_at = 0.0
 
-    _NO_ORDER_STATS = {'min': None, 'max': None, 'p50': None, 'p95': None, 'p99': None}
+    _NO_ORDER_STATS = {'mean': None, 'min': None, 'max': None, 'p50': None, 'p95': None, 'p99': None}
     # Which element of an entry each timed series is.
     _SERIES = {'lookup': 0, 'solr_round_trip': 1}
 
     @classmethod
     def _order_stats_of(cls, times_ns: List[int]) -> Dict:
-        """ min, max, p50, p95 and p99 of `times_ns` (sorted), in ms. """
+        """ mean, min, max, p50, p95 and p99 of `times_ns` (sorted), in ms. """
         stats = dict(cls._NO_ORDER_STATS)
         if times_ns:
+            stats['mean'] = sum(times_ns) / len(times_ns)
             stats['min'], stats['max'] = times_ns[0], times_ns[-1]
         if len(times_ns) >= 2:
             # 'inclusive' keeps every percentile within the observed times. The default
@@ -222,18 +226,15 @@ class RecentLookups:
         if self.maxlen <= 0:
             return
         if len(self._entries) >= self.maxlen:
-            old_total_ns, old_solr_ns, old_outcome = self._entries.popleft()
-            self._total_ns -= old_total_ns
-            self._solr_ns -= old_solr_ns
+            _, _, old_outcome = self._entries.popleft()
             self._outcomes[old_outcome] -= 1
         self._entries.append((total_ns, solr_ns, outcome))
-        self._total_ns += total_ns
-        self._solr_ns += solr_ns
         self._outcomes[outcome] += 1
         self._recorded += 1
 
     def _current_order_stats(self) -> Dict:
-        """ The order statistics of each series, keyed as _SERIES. Recomputed only if lookups
+        """ The latency figures (mean and order statistics) of each series, keyed as
+        _SERIES. Recomputed only if lookups
         have arrived since the last computation and it is more than PERCENTILE_CACHE_SECONDS
         old -- or it was made before there were the two lookups that percentiles need. One
         sort per series, so two sorts of the window per recomputation. """
@@ -256,9 +257,6 @@ class RecentLookups:
 
         order_stats = self._current_order_stats()
 
-        def _mean_ms(total_ns):
-            return round(total_ns / count / 1_000_000, 2) if count else None
-
         # The latencies are grouped by what they time, and named for it, so that nobody
         # reading /status takes lookup_ms for solr.queries.handler_ms: they time different
         # spans, and the gap between them is NameRes's own overhead. The counts aren't
@@ -271,7 +269,7 @@ class RecentLookups:
             # Lookups in the window that failed, split by how: `timeouts` hit
             # SOLR_TIMEOUT_SECONDS, `cancelled` were abandoned while waiting on Solr (a
             # server shutdown, say), and `errors` are everything else (Solr returned an
-            # error, or couldn't be reached). Disjoint, so their sum is every failure.
+            # error or couldn't be reached, or its answer couldn't be made into results). Disjoint, so their sum is every failure.
             # Their times are in the figures below: a failed lookup kept its caller
             # waiting too. Not the same as solr.queries.timeouts, which counts only
             # requests Solr itself cut short.
@@ -280,12 +278,12 @@ class RecentLookups:
             'cancelled': self._outcomes['cancelled'],
             # The whole of lookup(): Solr round trip plus building the results. It doesn't
             # include FastAPI's handling of the request or the network to the caller.
-            'lookup_ms': {'mean': _mean_ms(self._total_ns), **order_stats['lookup']},
+            'lookup_ms': order_stats['lookup'],
             # The part of lookup_ms spent on the Solr request, as NameRes sees it: setting
             # up the HTTP client and connection, Solr's handling (solr.queries.handler_ms),
             # the response's transfer, and decoding its JSON. The lookup log line's
             # "for the Solr round trip" figure.
-            'solr_round_trip_ms': {'mean': _mean_ms(self._solr_ns), **order_stats['solr_round_trip']},
+            'solr_round_trip_ms': order_stats['solr_round_trip'],
         }
 
 
@@ -376,8 +374,10 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
             return {'metrics_error': f"Solr's /admin/metrics returned HTTP {metrics_resp.status_code}."}
         all_metrics = _dict(metrics_resp.json().get('metrics'))
 
+        # A memory size of -1 is the JVM's 'undefined' (MemoryUsage.getMax() with no
+        # maximum set), so a negative size is unknown, not a size.
         def _mb(n):
-            return round(n / 1_048_576, 1) if _number(n) is not None else None
+            return round(n / 1_048_576, 1) if _number(n) is not None and n >= 0 else None
 
         metrics = {}
 
@@ -433,21 +433,38 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
         # nested 'memory.heap' map; see the Gotchas in CLAUDE.md.
         heap_used = _number(jvm.get('memory.heap.used'))
         heap_max = _number(jvm.get('memory.heap.max'))
+        if heap_max is not None and heap_max <= 0:
+            heap_max = None    # -1: no maximum defined, so no percentage of it either.
 
         # GC pause totals across whichever collectors are configured (G1, etc.).
         # High gc_time_ms relative to uptime points at heap pressure — a heap-sizing signal.
         # Skip anything non-numeric rather than letting one odd gauge fail the whole block.
         # No usable gauge at all is None, not 0: a sum of nothing would report a misread
         # metric name, or a Solr that stopped sending them, as a JVM that never collected.
+        #
+        # Solr names each gauge after a GarbageCollectorMXBean, spaces turned to hyphens.
+        # Some beans time concurrent work that runs beside the application rather than
+        # pausing it, and are left out so that the totals stay pause totals. As checked on
+        # Temurin 21: G1 adds 'G1 Concurrent GC' (from JDK 20) to 'G1 Young Generation' and
+        # 'G1 Old Generation'; ZGC has 'ZGC Cycles' and 'ZGC Pauses' ('ZGC Minor/Major
+        # Cycles/Pauses' when generational); Shenandoah 'Shenandoah Cycles' and
+        # 'Shenandoah Pauses'. Solr 9.10's image runs JDK 17, which has none of these
+        # concurrent beans under G1, but a Solr on a newer JDK would otherwise count G1's
+        # concurrent marking as pause time.
+        def _is_pause_collector(key):
+            collector = key[len('gc.'):].rsplit('.', 1)[0]
+            return 'Concurrent' not in collector and not collector.endswith('Cycles')
+
         def _gc_total(suffix):
             values = [v for k, v in jvm.items()
-                      if k.startswith('gc.') and k.endswith(suffix) and _number(v) is not None]
+                      if k.startswith('gc.') and k.endswith(suffix) and _is_pause_collector(k)
+                      and _number(v) is not None]
             return sum(values) if values else None
 
         metrics['jvm'] = {
             'heap_used_mb': _mb(heap_used),
             'heap_max_mb': _mb(heap_max),
-            'heap_used_pct': round(heap_used / heap_max * 100, 1) if heap_used is not None and heap_max else None,
+            'heap_used_pct': round(heap_used / heap_max * 100, 1) if heap_used is not None and heap_max is not None else None,
             'cpu_load': _number(jvm.get('os.processCpuLoad')),
             'gc_count': _gc_total('.count'),
             'gc_time_ms': _gc_total('.time'),
@@ -707,7 +724,7 @@ async def synonyms_post(
 
 async def name_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    time_start = time.time_ns()
+    time_start = time.perf_counter_ns()
     query = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
@@ -727,7 +744,7 @@ async def name_lookup(curies) -> Dict[str, Dict]:
     }
     for doc in response_json["response"]["docs"]:
         output[doc["curie"]] = doc
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
 
     logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)}: took {(time_end - time_start)/1_000_000:.2f}ms")
 
@@ -923,7 +940,9 @@ async def lookup(string: str,
         strings, enough to swamp the window, and its strings compete with each other for Solr
         while a /lookup caller's doesn't. For the same reason a slow string is logged at INFO
         rather than as a SLOW QUERY warning, so that one bulk request against a struggling
-        Solr can't bury the log in them. Failures are still logged at WARNING.
+        Solr can't bury the log in them. Its failures are logged at INFO too, and
+        bulk_lookup() logs one FAILED BULK QUERY warning for the request: a bulk request
+        against an unreachable Solr would otherwise log one warning per string.
 
     :param autocomplete: Should we do the lookup in autocomplete mode (in which we expect the final word to be
         incomplete) or not (in which the entire phrase is expected to be complete, i.e. as an entity linker)?
@@ -933,7 +952,10 @@ async def lookup(string: str,
         will be returned, rather than filtering to concepts that are both PhenotypicFeature and Disease.
     """
 
-    time_start = time.time_ns()
+    # Durations come from perf_counter_ns(), a monotonic clock, not time.time_ns(): the wall
+    # clock can be stepped (NTP, a VM resuming) mid-lookup, and a negative or inflated
+    # duration would then sit in recent_queries' min, max and mean until it left the window.
+    time_start = time.perf_counter_ns()
 
     # autocomplete asks us to treat the last word as a prefix; exact asks us to match the whole
     # string and nothing else. There is no sensible reading of the two together, so rather than
@@ -1143,7 +1165,8 @@ async def lookup(string: str,
     log_msg_prefix = (f"Lookup query to Solr for {json.dumps(string)} " +
                       f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}, exact={exact})")
 
-    time_solr_start = time.time_ns()
+    time_solr_start = time.perf_counter_ns()
+    time_solr_end = None    # Set once Solr has answered; see the except below.
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
     try:
         client = solr_client()
@@ -1152,6 +1175,90 @@ async def lookup(string: str,
             logger.error("Solr REST error: %s", response.text)
             response.raise_for_status()
         response = response.json()
+        time_solr_end = time.perf_counter_ns()
+
+        # Do we have any debug.explain information?
+        explain_info = {}
+        if 'debug' in response and 'explain' in response['debug']:
+            explain_info = response['debug']['explain']
+
+        logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
+
+        # Associate highlighting information with search results.
+        highlighting_response = response.get("highlighting", {})
+
+        outputs = []
+        for doc in response['response']['docs']:
+            preferred_matches = []
+            synonym_matches = []
+
+            if exact and highlighting:
+                # Solr did not highlight anything for us: exact mode matches with a filter query
+                # against fields that are not stored, so there is no scored query and nothing for the
+                # highlighter to mark up. Synthesize the same shape from the documents instead, so that
+                # a caller reading `highlighting` does not have to care which mode produced it.
+                #
+                # Every match in exact mode is a whole-value match, so the "highlighted" form of a
+                # matching name is simply the entire name wrapped in the same tags Solr would have
+                # used. Escape it first, since we ask Solr for hl.encoder=html in the default path.
+                def mark(value: str) -> str:
+                    return f"<strong>{html.escape(value)}</strong>"
+
+                if exact in {ExactMatchMode.label, ExactMatchMode.any}:
+                    preferred_name = doc.get("preferred_name", "")
+                    if preferred_name.lower() == string_lc:
+                        preferred_matches.append(mark(preferred_name))
+
+                if exact in {ExactMatchMode.synonyms, ExactMatchMode.any}:
+                    synonym_matches.extend(
+                        mark(name) for name in doc.get("names", []) if name.lower() == string_lc
+                    )
+
+            elif doc['id'] in highlighting_response:
+                matches = highlighting_response[doc['id']]
+
+                # We order exactish matches before token matches.
+                if 'preferred_name_exactish' in matches:
+                    preferred_matches.extend(matches['preferred_name_exactish'])
+                if 'preferred_name' in matches:
+                    preferred_matches.extend(matches['preferred_name'])
+
+                # Solr sometimes returns duplicates or a blank string here?
+                preferred_matches = list(filter(lambda s: s, set(preferred_matches)))
+
+                # We order exactish matches before token matches.
+                if 'names_exactish' in matches:
+                    synonym_matches.extend(matches['names_exactish'])
+                if 'names' in matches:
+                    synonym_matches.extend(matches['names'])
+
+                # Solr sometimes returns duplicates or a blank string here?
+                synonym_matches = list(filter(lambda s: s, set(synonym_matches)))
+
+            # Prepare debugging and explain information for this request.
+            debug_for_this_request = response.get('debug', None)
+            explain_for_this_doc = None
+            if debug in {DebugOptions.results, DebugOptions.all}:
+                if doc['id'] in explain_info:
+                    explain_for_this_doc = explain_info[doc['id']]
+
+                    # If we have explain information, we don't need to also include it in the debugging information.
+                    debug_for_this_request['explain'] = {"_comment": "Removed to avoid data duplication"}
+
+
+            outputs.append(LookupResult(curie=doc.get("curie", ""),
+                               label=doc.get("preferred_name", ""),
+                               highlighting={
+                                   'labels': preferred_matches,
+                                   'synonyms': synonym_matches,
+                               } if highlighting else {},
+                               synonyms=doc.get("names", []),
+                               score=doc.get("score", ""),
+                               taxa=doc.get("taxa", []),
+                               clique_identifier_count=doc.get("clique_identifier_count", 0),
+                               types=[f"biolink:{d}" for d in doc.get("types", [])],
+                               explain=explain_for_this_doc,
+                               debug=debug_for_this_request))
     except BaseException as e:
         # A failed lookup still has to be timed. The ones that hit SOLR_TIMEOUT_SECONDS are the
         # slowest requests of all, so recording times only on success would leave them out of
@@ -1159,7 +1266,13 @@ async def lookup(string: str,
         # Solr is struggling. BaseException rather than Exception so that a lookup cancelled
         # while it waits on Solr (asyncio.CancelledError) is timed too: those are slow ones
         # as well. It is re-raised below, so nothing is swallowed.
-        time_failed = time.time_ns()
+        #
+        # The try covers building the results as well as the Solr request, so that a lookup
+        # that fails on a document it can't turn into a LookupResult is counted and logged
+        # too: its caller gets a 500 all the same, and /status mustn't report no failures
+        # while /lookup is returning them. Such a failure's Solr round trip ended when Solr
+        # answered, not when the lookup failed.
+        time_failed = time.perf_counter_ns()
         time_taken_ms = (time_failed - time_start)/1_000_000
         if isinstance(e, httpx.TimeoutException):
             outcome = 'timeout'
@@ -1168,103 +1281,24 @@ async def lookup(string: str,
         else:
             outcome = 'error'
         if not bulk:
-            recent_lookups.record(time_failed - time_start, time_failed - time_solr_start, outcome)
-        logger.warning(f"FAILED QUERY ({outcome}: {type(e).__name__}): {log_msg_prefix}: "
-                       f"failed after {time_taken_ms:.2f}ms")
+            solr_end = time_solr_end if time_solr_end is not None else time_failed
+            recent_lookups.record(time_failed - time_start, solr_end - time_solr_start, outcome)
+        # A bulk string's failure is at INFO: bulk_lookup() warns once for the whole request.
+        (logger.info if bulk else logger.warning)(
+            f"FAILED QUERY ({outcome}: {type(e).__name__}): {log_msg_prefix}: "
+            f"failed after {time_taken_ms:.2f}ms")
         raise
 
-    # Do we have any debug.explain information?
-    explain_info = {}
-    if 'debug' in response and 'explain' in response['debug']:
-        explain_info = response['debug']['explain']
-
-    time_solr_end = time.time_ns()
-    logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
-
-    # Associate highlighting information with search results.
-    highlighting_response = response.get("highlighting", {})
-
-    outputs = []
-    for doc in response['response']['docs']:
-        preferred_matches = []
-        synonym_matches = []
-
-        if exact and highlighting:
-            # Solr did not highlight anything for us: exact mode matches with a filter query
-            # against fields that are not stored, so there is no scored query and nothing for the
-            # highlighter to mark up. Synthesize the same shape from the documents instead, so that
-            # a caller reading `highlighting` does not have to care which mode produced it.
-            #
-            # Every match in exact mode is a whole-value match, so the "highlighted" form of a
-            # matching name is simply the entire name wrapped in the same tags Solr would have
-            # used. Escape it first, since we ask Solr for hl.encoder=html in the default path.
-            def mark(value: str) -> str:
-                return f"<strong>{html.escape(value)}</strong>"
-
-            if exact in {ExactMatchMode.label, ExactMatchMode.any}:
-                preferred_name = doc.get("preferred_name", "")
-                if preferred_name.lower() == string_lc:
-                    preferred_matches.append(mark(preferred_name))
-
-            if exact in {ExactMatchMode.synonyms, ExactMatchMode.any}:
-                synonym_matches.extend(
-                    mark(name) for name in doc.get("names", []) if name.lower() == string_lc
-                )
-
-        elif doc['id'] in highlighting_response:
-            matches = highlighting_response[doc['id']]
-
-            # We order exactish matches before token matches.
-            if 'preferred_name_exactish' in matches:
-                preferred_matches.extend(matches['preferred_name_exactish'])
-            if 'preferred_name' in matches:
-                preferred_matches.extend(matches['preferred_name'])
-
-            # Solr sometimes returns duplicates or a blank string here?
-            preferred_matches = list(filter(lambda s: s, set(preferred_matches)))
-
-            # We order exactish matches before token matches.
-            if 'names_exactish' in matches:
-                synonym_matches.extend(matches['names_exactish'])
-            if 'names' in matches:
-                synonym_matches.extend(matches['names'])
-
-            # Solr sometimes returns duplicates or a blank string here?
-            synonym_matches = list(filter(lambda s: s, set(synonym_matches)))
-
-        # Prepare debugging and explain information for this request.
-        debug_for_this_request = response.get('debug', None)
-        explain_for_this_doc = None
-        if debug in {DebugOptions.results, DebugOptions.all}:
-            if doc['id'] in explain_info:
-                explain_for_this_doc = explain_info[doc['id']]
-
-                # If we have explain information, we don't need to also include it in the debugging information.
-                debug_for_this_request['explain'] = {"_comment": "Removed to avoid data duplication"}
-
-
-        outputs.append(LookupResult(curie=doc.get("curie", ""),
-                           label=doc.get("preferred_name", ""),
-                           highlighting={
-                               'labels': preferred_matches,
-                               'synonyms': synonym_matches,
-                           } if highlighting else {},
-                           synonyms=doc.get("names", []),
-                           score=doc.get("score", ""),
-                           taxa=doc.get("taxa", []),
-                           clique_identifier_count=doc.get("clique_identifier_count", 0),
-                           types=[f"biolink:{d}" for d in doc.get("types", [])],
-                           explain=explain_for_this_doc,
-                           debug=debug_for_this_request))
-
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
     time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
     if not bulk:
         recent_lookups.record(time_end - time_start, time_solr_end - time_solr_start)
-    # Parsed downstream (TranslatorSRI/babel-validation's NameRes log analysis), so change the
-    # wording only together with its parser, which must keep accepting the old text:
-    # v1.7.1 and earlier logged "(with Yms waiting for Solr)". tests/test_status.py pins it.
+    # Parsed downstream (TranslatorSRI/babel-validation's NameRes log analysis, added in its
+    # PR #107: LOOKUP_LINE_RE in log-analysis/nameres/analyze_nameres_logs.py), so change the
+    # wording only together with that parser, which must keep accepting the old text:
+    # v1.7.1 and earlier logged "(with Yms waiting for Solr)", and the parser reads both.
+    # It ignores the log level. tests/test_status.py pins the format.
     log_msg = (f"{log_msg_prefix}: "
                f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms for the Solr round trip)")
     if time_taken_ms > SLOW_QUERY_THRESHOLD_MS and not bulk:
@@ -1353,7 +1387,7 @@ class NameResQuery(BaseModel):
           tags=["lookup"]
 )
 async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
-    time_start = time.time_ns()
+    time_start = time.perf_counter_ns()
 
     # Bounded so that a single large request can't open a socket per string; see
     # Config.solr_max_concurrent_lookups.
@@ -1377,10 +1411,29 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             )
         return string, results
 
-    pairs = await asyncio.gather(*[do_lookup(s) for s in query.strings])
+    tasks = [asyncio.create_task(do_lookup(s)) for s in query.strings]
+    try:
+        pairs = await asyncio.gather(*tasks)
+    except BaseException as e:
+        # One string has failed, so the request has (it becomes a 500). gather() doesn't
+        # cancel the others when one fails, so without this every remaining string would
+        # still be sent to a Solr that is probably down or overloaded, each failing in turn.
+        # Cancel them, and wait for them so that none outlives the request.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        failed = sum(1 for task in tasks if not task.cancelled() and task.exception() is not None)
+        time_failed = time.perf_counter_ns()
+        # The one warning for the request: its strings' own failures are logged at INFO
+        # (see lookup()'s `bulk`), so that a bulk request against an unreachable Solr logs
+        # one warning rather than one per string.
+        logger.warning(f"FAILED BULK QUERY ({type(e).__name__}): Bulk lookup query for "
+                       f"{len(query.strings)} strings ({query}): {failed} failed, and those not yet "
+                       f"done were cancelled, after {(time_failed - time_start)/1_000_000:.2f}ms")
+        raise
     result = dict(pairs)
 
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
     logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}): took {(time_end - time_start)/1_000_000:.2f}ms")
     return result
 
