@@ -119,12 +119,143 @@ async def docs_redirect():
     return RedirectResponse(url='/docs')
 
 
+async def fetch_solr_metrics(core_name: Optional[str]) -> Dict:
+    """
+    Read Solr's own health metrics from /admin/metrics, for /status?full=true.
+
+    Returns the `queries`, `cache`, `jvm` and `os` blocks that status() spreads into its
+    `solr` object, or just `jvm` and `os` when core_name is None (there is no core to read
+    query or cache figures from). If the fetch fails, returns {'metrics_error': ...} instead,
+    so that a caller who asked for metrics can tell a failure from not having asked.
+    """
+    metrics_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/metrics"
+    try:
+        async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
+            # A single call with group=core&group=jvm retrieves both in one round-trip.
+            metrics_resp = await client.get(metrics_url, params=[
+                ('group', 'core'),
+                ('group', 'jvm'),
+                ('prefix', 'QUERY./select'),
+                # Solr 9 registers the searcher caches as CACHE.searcher.*, not
+                # CACHE.core.* -- a wrong name here yields nulls, not an error.
+                ('prefix', 'CACHE.searcher.filterCache'),
+                ('prefix', 'CACHE.searcher.queryResultCache'),
+                ('prefix', 'memory.heap'),
+                ('prefix', 'gc.'),
+                ('prefix', 'os.'),
+                ('wt', 'json'),
+            ])
+        if metrics_resp.status_code >= 300:
+            logger.warning("Solr error on accessing /solr/admin/metrics: HTTP %d: %s",
+                           metrics_resp.status_code, metrics_resp.text)
+            return {'metrics_error': f"Solr's /admin/metrics returned HTTP {metrics_resp.status_code}."}
+        all_metrics = metrics_resp.json().get('metrics', {})
+
+        def _mb(n):
+            return round(n / 1_048_576, 1) if isinstance(n, (int, float)) else None
+
+        metrics = {}
+
+        # Query and cache figures belong to a core; without one there are none to report.
+        if core_name:
+            # A core's metrics registry is named solr.core.<coreName>. Read the one status()
+            # resolved, rather than whichever solr.core.* comes first, so a Solr with more
+            # than one core can't report another core's figures.
+            core_data = all_metrics.get(f'solr.core.{core_name}', {})
+            qh = core_data.get('QUERY./select.requestTimes', {})
+
+            # requests is a plain counter, but errors/timeouts are meters
+            # ({count, meanRate, ...}); report just the cumulative count.
+            def _count(metric):
+                return metric.get('count') if isinstance(metric, dict) else metric
+
+            # NameRes leans on fq (prefix/type/taxon filters), so filterCache matters
+            # as much as queryResultCache. Rising evictions => cache too small.
+            def _cache(name):
+                c = core_data.get(f'CACHE.searcher.{name}', {})
+                return {
+                    'hitratio': c.get('hitratio'),
+                    'lookups': c.get('lookups'),
+                    'hits': c.get('hits'),
+                    'evictions': c.get('evictions'),
+                    'size': c.get('size'),
+                }
+
+            # Every /select this core served -- /synonyms and /reverse_lookup as well as
+            # /lookup -- unlike the top-level recent_queries, which times lookup() alone.
+            metrics['queries'] = {
+                'requests': core_data.get('QUERY./select.requests'),
+                'errors': _count(core_data.get('QUERY./select.errors')),
+                'timeouts': _count(core_data.get('QUERY./select.timeouts')),
+                'mean_ms': qh.get('mean_ms'),
+                'p50_ms': qh.get('median_ms'),
+                'p95_ms': qh.get('p95_ms'),
+                'p99_ms': qh.get('p99_ms'),
+            }
+            metrics['cache'] = {
+                'filterCache': _cache('filterCache'),
+                'queryResultCache': _cache('queryResultCache'),
+            }
+
+        jvm = all_metrics.get('solr.jvm', {})
+
+        # Solr returns the heap gauge either nested ({'memory.heap': {'used':..}})
+        # or flattened ('memory.heap.used'), depending on version. Support both.
+        heap = jvm.get('memory.heap')
+        if isinstance(heap, dict):
+            heap_used, heap_max = heap.get('used'), heap.get('max')
+        else:
+            heap_used, heap_max = jvm.get('memory.heap.used'), jvm.get('memory.heap.max')
+
+        # GC pause totals across whichever collectors are configured (G1, etc.).
+        # High gc_time_ms relative to uptime points at heap pressure — a heap-sizing signal.
+        # Skip anything non-numeric rather than letting one odd gauge fail the whole block.
+        def _gc_total(suffix):
+            return sum(v for k, v in jvm.items()
+                       if k.startswith('gc.') and k.endswith(suffix) and isinstance(v, (int, float)))
+
+        metrics['jvm'] = {
+            'heap_used_mb': _mb(heap_used),
+            'heap_max_mb': _mb(heap_max),
+            'heap_used_pct': round(heap_used / heap_max * 100, 1) if heap_used is not None and heap_max else None,
+            'cpu_load': jvm.get('os.processCpuLoad'),
+            'gc_count': _gc_total('.count'),
+            'gc_time_ms': _gc_total('.time'),
+        }
+
+        # What the JVM's operating-system bean reports, for sizing the Solr pod's CPU/memory
+        # requests. Named 'os' after Solr's own os.* gauges rather than 'host' or 'node':
+        # in a container, available_processors and total_physical_mem_mb are the container's
+        # limits, not the machine's (system_load_average is machine-wide), and 'node' would
+        # read as the Kubernetes node.
+        # total_physical_mem sizes the pod: Solr mmaps the index, so RAM beyond the heap
+        # becomes OS page cache for the (read-only) index. (Free physical memory is
+        # deliberately omitted: it is Linux MemFree, which excludes page cache and so reads
+        # near-zero on a healthy node -- more misleading than useful.)
+        metrics['os'] = {
+            'available_processors': jvm.get('os.availableProcessors'),
+            'system_load_average': jvm.get('os.systemLoadAverage'),
+            'system_cpu_load': jvm.get('os.systemCpuLoad'),
+            'total_physical_mem_mb': _mb(jvm.get('os.totalPhysicalMemorySize')),
+        }
+        return metrics
+    except Exception as e:
+        logger.warning("Failed to retrieve Solr metrics for /status", exc_info=True)
+        return {'metrics_error': f"Could not retrieve Solr metrics: {type(e).__name__}: {e}"}
+
+
 @app.get("/status",
          summary="Get status and counts for this NameRes instance.",
          description="<p>This endpoint will return status information for this NameRes instance, with the counts and statistics read from its Solr core grouped under <code>solr</code>.</p>"
                      "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#status\">API documentation</a>.</p>"
          )
-async def status_get(full: bool = False) -> Dict:
+async def status_get(
+    full: bool = Query(
+        False,
+        description="Also read Solr's own health metrics -- `queries`, `cache`, `jvm` and `os` under "
+                    "`solr` -- at the cost of an extra round-trip to Solr. Leave off for liveness probes.",
+    ),
+) -> Dict:
     """ Return status and count information from the underyling Solr instance. """
     return await status(full)
 
@@ -132,7 +263,6 @@ async def status_get(full: bool = False) -> Dict:
 async def status(full: bool = False) -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/cores"
-    metrics_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/metrics"
     async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
         response = await client.get(query_url, params={
             'action': 'STATUS'
@@ -140,123 +270,6 @@ async def status(full: bool = False) -> Dict:
         if response.status_code >= 300:
             logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
             response.raise_for_status()
-
-        # Fetch Solr query handler, cache, and JVM metrics for strain detection.
-        # A single call with group=core&group=jvm retrieves both in one round-trip.
-        # Only performed when the caller passes ?full=true, as it adds latency.
-        solr_metrics = {
-            "message": "Use /status?full=true to retrieve these metrics."
-        }
-        if full:
-            try:
-                metrics_resp = await client.get(metrics_url, params=[
-                    ('group', 'core'),
-                    ('group', 'jvm'),
-                    ('prefix', 'QUERY./select'),
-                    # Solr 9 registers the searcher caches as CACHE.searcher.*, not
-                    # CACHE.core.* -- a wrong name here yields nulls, not an error.
-                    ('prefix', 'CACHE.searcher.filterCache'),
-                    ('prefix', 'CACHE.searcher.queryResultCache'),
-                    ('prefix', 'memory.heap'),
-                    ('prefix', 'gc.'),
-                    ('prefix', 'os.'),
-                    ('wt', 'json'),
-                ])
-                # A caller who asked for ?full=true must be able to tell a failed fetch from not
-                # having asked, so every failure below replaces the placeholder -- whose advice is
-                # to pass ?full=true -- with an 'error' saying what went wrong.
-                if metrics_resp.status_code >= 300:
-                    logger.warning("Solr error on accessing /solr/admin/metrics: HTTP %d: %s",
-                                   metrics_resp.status_code, metrics_resp.text)
-                    solr_metrics = {
-                        "error": f"Solr's /admin/metrics returned HTTP {metrics_resp.status_code}."
-                    }
-                else:
-                    all_metrics = metrics_resp.json().get('metrics', {})
-
-                    # A NameRes Solr has exactly one core; its metrics registry is named
-                    # solr.core.<coreName> (name_lookup standalone, name_lookup_shard1_replica_n1
-                    # on older cloud backups). Grab whichever one is present.
-                    core_data = next((v for k, v in all_metrics.items() if k.startswith('solr.core.')), {})
-                    qh = core_data.get('QUERY./select.requestTimes', {})
-
-                    # requests is a plain counter, but errors/timeouts are meters
-                    # ({count, meanRate, ...}); report just the cumulative count.
-                    def _count(metric):
-                        return metric.get('count') if isinstance(metric, dict) else metric
-
-                    # NameRes leans on fq (prefix/type/taxon filters), so filterCache matters
-                    # as much as queryResultCache. Rising evictions => cache too small.
-                    def _cache(name):
-                        c = core_data.get(f'CACHE.searcher.{name}', {})
-                        return {
-                            'hitratio': c.get('hitratio'),
-                            'lookups': c.get('lookups'),
-                            'hits': c.get('hits'),
-                            'evictions': c.get('evictions'),
-                            'size': c.get('size'),
-                        }
-                    jvm = all_metrics.get('solr.jvm', {})
-
-                    def _mb(n):
-                        return round(n / 1_048_576, 1) if isinstance(n, (int, float)) else None
-
-                    # Solr returns the heap gauge either nested ({'memory.heap': {'used':..}})
-                    # or flattened ('memory.heap.used'), depending on version. Support both.
-                    heap = jvm.get('memory.heap')
-                    if isinstance(heap, dict):
-                        heap_used, heap_max = heap.get('used'), heap.get('max')
-                    else:
-                        heap_used, heap_max = jvm.get('memory.heap.used'), jvm.get('memory.heap.max')
-
-                    # GC pause totals across whichever collectors are configured (G1, etc.).
-                    # High gc_time_ms relative to uptime points at heap pressure — a heap-sizing signal.
-                    # Skip anything non-numeric rather than letting one odd gauge fail the whole block.
-                    def _gc_total(suffix):
-                        return sum(v for k, v in jvm.items()
-                                   if k.startswith('gc.') and k.endswith(suffix) and isinstance(v, (int, float)))
-                    gc_count = _gc_total('.count')
-                    gc_time_ms = _gc_total('.time')
-
-                    solr_metrics = {
-                        'query_handler': {
-                            'requests': core_data.get('QUERY./select.requests'),
-                            'errors': _count(core_data.get('QUERY./select.errors')),
-                            'timeouts': _count(core_data.get('QUERY./select.timeouts')),
-                            'mean_ms': qh.get('mean_ms'),
-                            'p50_ms': qh.get('median_ms'),
-                            'p95_ms': qh.get('p95_ms'),
-                            'p99_ms': qh.get('p99_ms'),
-                        },
-                        'cache': {
-                            'filterCache': _cache('filterCache'),
-                            'queryResultCache': _cache('queryResultCache'),
-                        },
-                        'jvm': {
-                            'heap_used_mb': _mb(heap_used),
-                            'heap_max_mb': _mb(heap_max),
-                            'heap_used_pct': round(heap_used / heap_max * 100, 1) if heap_used is not None and heap_max else None,
-                            'cpu_load': jvm.get('os.processCpuLoad'),
-                            'gc_count': gc_count,
-                            'gc_time_ms': gc_time_ms,
-                        },
-                        # Host resources, for sizing the Solr pod's CPU/memory requests.
-                        # total_physical_mem sizes the pod: Solr mmaps the index, so RAM beyond
-                        # the heap becomes OS page cache for the (read-only) index. (Free physical
-                        # memory is deliberately omitted: it is Linux MemFree, which excludes page
-                        # cache and so reads near-zero on a healthy node — more misleading than useful.)
-                        'host': {
-                            'available_processors': jvm.get('os.availableProcessors'),
-                            'system_load_average': jvm.get('os.systemLoadAverage'),
-                            'system_cpu_load': jvm.get('os.systemCpuLoad'),
-                            'total_physical_mem_mb': _mb(jvm.get('os.totalPhysicalMemorySize')),
-                        },
-                    }
-            except Exception as e:
-                logger.warning("Failed to retrieve Solr metrics for /status", exc_info=True)
-                solr_metrics = {
-                    "error": f"Could not retrieve Solr metrics: {type(e).__name__}: {e}"
-                }
 
     result = response.json()
 
@@ -280,7 +293,7 @@ async def status(full: bool = False) -> Dict:
     # Prepare recent times for reporting.
     # End-to-end latency percentiles over the window. These measure the full round-trip
     # the caller sees (including NameRes processing), so comparing them against Solr's own
-    # query_handler percentiles localizes a latency tail to Solr vs. NameRes. Computed from
+    # solr.queries percentiles localizes a latency tail to Solr vs. NameRes. Computed from
     # local data (no Solr round-trip), so they stay on the default /status path.
     if len(recent_query_times) >= 2:
         qs = statistics.quantiles(recent_query_times, n=100)
@@ -336,6 +349,10 @@ async def status(full: bool = False) -> Dict:
         'config': config.public(),
     }
 
+    # Solr's own health metrics are an extra round-trip, so only on ?full=true. Without a
+    # core there are no query or cache figures to read, only the JVM's.
+    metrics = await fetch_solr_metrics(core_name if core is not None else None) if full else {}
+
     if core is not None:
         index = {}
         if 'index' in core:
@@ -348,9 +365,9 @@ async def status(full: bool = False) -> Dict:
             # Everything read from Solr goes under 'solr', named after `backend`'s value,
             # so that it can't collide with the service's own keys: until #296 the Solr
             # index version sat at the top level as 'version', which is the key NodeNorm
-            # uses for the API version. This is the same layout as the improve-performance
-            # branch (deployed as release-v1.5.2-with-metrics), whose JVM, OS and cache
-            # stats belong in here too.
+            # uses for the API version. ?full=true adds Solr's health metrics (queries,
+            # cache, jvm, os) alongside the core's stats, or metrics_error if they could not
+            # be read.
             'solr': {
                 # The core actually reported on, which the single-core fallback above
                 # means is not necessarily config.solr_core.
@@ -368,10 +385,10 @@ async def status(full: bool = False) -> Dict:
                 'segmentCount': index.get('segmentCount', ''),
                 'lastModified': index.get('lastModified', ''),
                 'size': index.get('size', ''),
+                **metrics,
             },
-            # Timed by NameRes itself rather than read from Solr.
+            # Timed by NameRes itself rather than read from Solr, so not under 'solr'.
             'recent_queries': recent_queries,
-            'solr_metrics': solr_metrics,
         }
     else:
         return {
@@ -379,7 +396,8 @@ async def status(full: bool = False) -> Dict:
             'message': 'Expected core not found.',
             **common,
             'recent_queries': recent_queries,
-            'solr_metrics': solr_metrics,
+            # Only the JVM's figures, and only with ?full=true: there is no core to report on.
+            **({'solr': metrics} if metrics else {}),
         }
 
 

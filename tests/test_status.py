@@ -54,7 +54,7 @@ def test_status():
 
 
 def test_status_shape():
-    """Verify /status returns expected fields including recent_queries; solr_metrics absent by default."""
+    """Verify /status returns expected fields including recent_queries; no Solr metrics by default."""
     client = TestClient(app)
     response = client.get("/status")
     assert response.status_code == 200
@@ -72,36 +72,37 @@ def test_status_shape():
     assert 'p50_ms' in rq and 'p95_ms' in rq and 'p99_ms' in rq
     assert 'failed' in rq and 'timed_out' in rq
 
-    # solr_metrics should be present but with only a message unless ?full=true is passed.
-    assert 'solr_metrics' in data and 'message' in data['solr_metrics']
+    # Solr's health metrics are an extra round-trip, so they appear only with ?full=true.
+    # They live under 'solr' -- never at the top level, as solr_metrics once did.
+    assert 'solr_metrics' not in data
+    for key in ('queries', 'cache', 'jvm', 'os', 'metrics_error'):
+        assert key not in data['solr']
 
 
 def test_status_metrics_param():
-    """With ?full=true, solr_metrics is included and has the expected structure."""
+    """With ?full=true, Solr's health metrics are added to `solr`, with the expected structure."""
     client = TestClient(app)
     response = client.get("/status", params={'full': 'true'})
     assert response.status_code == 200
     data = response.json()
 
-    sm = data['solr_metrics']
+    assert 'solr_metrics' not in data
+    solr = data['solr']
     # The test Solr is healthy, so the fetch should succeed; the failure paths are
     # covered by the faked-Solr tests below.
-    assert 'error' not in sm, sm['error']
-    assert 'message' not in sm
-    assert 'query_handler' in sm
-    assert 'cache' in sm
-    assert 'jvm' in sm
-    assert 'host' in sm
-    assert 'requests' in sm['query_handler']
-    assert 'filterCache' in sm['cache'] and 'queryResultCache' in sm['cache']
-    assert 'hitratio' in sm['cache']['filterCache']
-    assert 'heap_used_pct' in sm['jvm']
-    # GC and host resource fields drive Solr pod sizing decisions.
-    assert 'gc_count' in sm['jvm'] and 'gc_time_ms' in sm['jvm']
-    assert 'available_processors' in sm['host']
-    assert 'total_physical_mem_mb' in sm['host']
+    assert 'metrics_error' not in solr, solr['metrics_error']
+    # The core's own stats are still there alongside the metrics.
+    assert solr['numDocs'] == 89
+    assert 'requests' in solr['queries']
+    assert 'filterCache' in solr['cache'] and 'queryResultCache' in solr['cache']
+    assert 'hitratio' in solr['cache']['filterCache']
+    assert 'heap_used_pct' in solr['jvm']
+    # GC and OS resource fields drive Solr pod sizing decisions.
+    assert 'gc_count' in solr['jvm'] and 'gc_time_ms' in solr['jvm']
+    assert isinstance(solr['os']['available_processors'], int)
+    assert solr['os']['total_physical_mem_mb'] > 0
     # errors/timeouts should be scalar counts (or None), not nested meter dicts.
-    assert not isinstance(sm['query_handler']['errors'], dict)
+    assert not isinstance(solr['queries']['errors'], dict)
 
 
 def test_status_reports_cache_metrics():
@@ -113,10 +114,10 @@ def test_status_reports_cache_metrics():
     client = TestClient(app)
     # A type filter goes through filterCache, so it has at least one lookup to report.
     client.get("/lookup", params={'string': 'Parkinson', 'biolink_type': 'biolink:Disease'})
-    sm = client.get("/status", params={'full': 'true'}).json()['solr_metrics']
-    filter_cache = sm['cache']['filterCache']
+    cache = client.get("/status", params={'full': 'true'}).json()['solr']['cache']
+    filter_cache = cache['filterCache']
     assert isinstance(filter_cache['lookups'], int) and filter_cache['lookups'] > 0
-    assert isinstance(sm['cache']['queryResultCache']['lookups'], int)
+    assert isinstance(cache['queryResultCache']['lookups'], int)
 
 
 def test_status_recent_queries_populated():
@@ -159,16 +160,17 @@ def test_fast_query_does_not_warn(monkeypatch, caplog):
 # The tests below fake Solr's responses by patching httpx.AsyncClient, so they exercise
 # the failure paths without needing a broken Solr (or any Solr at all).
 
-def _fake_solr_get(metrics_response=None):
-    """An AsyncClient.get that answers the core STATUS call with one healthy core and
-    /admin/metrics with metrics_response (a callable taking the request)."""
+HEALTHY_CORES = {'name_lookup': {'startTime': '2026-01-01T00:00:00Z', 'index': {'numDocs': 1}}}
+
+
+def _fake_solr_get(metrics_response=None, cores=HEALTHY_CORES):
+    """An AsyncClient.get that answers the core STATUS call with `cores` (by default one
+    healthy core) and /admin/metrics with metrics_response (a callable taking the request)."""
     async def get(self, url, params=None, **kwargs):
         request = httpx.Request("GET", url)
         if url.endswith("/admin/metrics"):
             return metrics_response(request)
-        return httpx.Response(200, request=request, json={
-            'status': {'name_lookup': {'startTime': '2026-01-01T00:00:00Z', 'index': {'numDocs': 1}}},
-        })
+        return httpx.Response(200, request=request, json={'status': cores})
     return get
 
 
@@ -180,21 +182,22 @@ def test_status_reports_metrics_http_error(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="api.server"):
         response = client.get("/status", params={'full': 'true'})
     assert response.status_code == 200
-    sm = response.json()['solr_metrics']
-    assert 'message' not in sm
-    assert '503' in sm['error']
+    solr = response.json()['solr']
+    assert '503' in solr['metrics_error']
+    # The core's own stats still come through when only the metrics fetch failed.
+    assert solr['numDocs'] == 1
     assert any("/solr/admin/metrics" in r.getMessage() and "503" in r.getMessage()
                for r in caplog.records)
 
 
 def test_status_reports_metrics_exception(monkeypatch):
-    """An exception while reading the metrics is reported, not swallowed into the placeholder."""
+    """An exception while reading the metrics is reported, not swallowed into an absent block."""
     monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
         lambda request: httpx.Response(200, request=request, text="not json")))
     client = TestClient(app)
-    sm = client.get("/status", params={'full': 'true'}).json()['solr_metrics']
-    assert 'message' not in sm
-    assert 'Could not retrieve Solr metrics' in sm['error']
+    solr = client.get("/status", params={'full': 'true'}).json()['solr']
+    assert 'Could not retrieve Solr metrics' in solr['metrics_error']
+    assert 'jvm' not in solr
 
 
 def test_status_tolerates_non_numeric_gc_gauge(monkeypatch):
@@ -206,10 +209,49 @@ def test_status_tolerates_non_numeric_gc_gauge(monkeypatch):
             'gc.G1-Old-Generation.count': 'n/a',
         }}})))
     client = TestClient(app)
-    sm = client.get("/status", params={'full': 'true'}).json()['solr_metrics']
-    assert 'error' not in sm
-    assert sm['jvm']['gc_count'] == 3
-    assert sm['jvm']['gc_time_ms'] == 40
+    solr = client.get("/status", params={'full': 'true'}).json()['solr']
+    assert 'metrics_error' not in solr
+    assert solr['jvm']['gc_count'] == 3
+    assert solr['jvm']['gc_time_ms'] == 40
+
+
+# Two cores, neither of them name_lookup, so the single-core fallback can't rescue it and
+# status() takes its error branch.
+MISPOINTED_CORES = {'other_a': {}, 'other_b': {}}
+
+
+def test_status_error_branch_reports_only_jvm_metrics(monkeypatch):
+    """With no core to report on, ?full=true still gives the JVM's metrics, but no
+    query or cache figures -- and none of those from some other core."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.other_a': {'QUERY./select.requests': 7},
+            'solr.jvm': {'os.availableProcessors': 4},
+        }}), cores=MISPOINTED_CORES))
+    client = TestClient(app)
+
+    data = client.get("/status").json()
+    assert data['status'] == 'error'
+    assert 'solr' not in data
+
+    data = client.get("/status", params={'full': 'true'}).json()
+    assert data['status'] == 'error'
+    assert data['backend'] == 'solr'
+    assert set(data['solr']) == {'jvm', 'os'}
+    assert data['solr']['os']['available_processors'] == 4
+
+
+def test_status_reads_metrics_of_the_resolved_core(monkeypatch):
+    """Query figures come from the core status() reports on, not whichever is listed first."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.another_core': {'QUERY./select.requests': 7},
+            'solr.core.name_lookup': {'QUERY./select.requests': 42},
+        }}), cores={**HEALTHY_CORES, 'another_core': {}}))
+    client = TestClient(app)
+    solr = client.get("/status", params={'full': 'true'}).json()['solr']
+    assert solr['core'] == 'name_lookup'
+    assert solr['queries']['requests'] == 42
 
 
 @pytest.mark.parametrize("failure, outcome", [
