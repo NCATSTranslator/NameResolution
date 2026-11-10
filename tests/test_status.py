@@ -131,9 +131,10 @@ def test_status_metrics_param():
     jvm = solr['jvm']
     assert jvm['heap_used_mb'] > 0 and jvm['heap_max_mb'] > 0
     assert 0 < jvm['heap_used_pct'] <= 100
-    # GC and OS resource fields drive Solr pod sizing decisions. A Solr that has loaded an
-    # index has collected garbage; a gc_count of 0 means the gc.* names were misread.
-    assert jvm['gc_count'] > 0 and jvm['gc_time_ms'] >= 0
+    # GC and OS resource fields drive Solr pod sizing decisions. A misread gc.* name gives
+    # None. A healthy Solr with a large heap may not have collected yet, so 0 is fine.
+    assert isinstance(jvm['gc_count'], int) and jvm['gc_count'] >= 0
+    assert isinstance(jvm['gc_time_ms'], int) and jvm['gc_time_ms'] >= 0
     assert isinstance(solr['os']['available_processors'], int)
     assert solr['os']['total_physical_mem_mb'] > 0
 
@@ -252,6 +253,19 @@ def test_status_tolerates_non_numeric_gc_gauge(monkeypatch):
     assert 'metrics_error' not in solr
     assert solr['jvm']['gc_count'] == 3
     assert solr['jvm']['gc_time_ms'] == 40
+
+
+def test_status_reports_missing_gc_metrics_as_null(monkeypatch):
+    """No gc.* gauges at all is unknown, not zero: a sum over nothing would report a
+    misread metric name as a JVM that never collected garbage."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.name_lookup': {},
+            'solr.jvm': {'os.availableProcessors': 4},
+        }})))
+    client = TestClient(app)
+    jvm = client.get("/status", params={'full': 'true'}).json()['solr']['jvm']
+    assert jvm['gc_count'] is None and jvm['gc_time_ms'] is None
 
 
 # Two cores, neither of them name_lookup, so the single-core fallback can't rescue it and

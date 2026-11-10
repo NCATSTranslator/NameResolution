@@ -362,9 +362,12 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
         # GC pause totals across whichever collectors are configured (G1, etc.).
         # High gc_time_ms relative to uptime points at heap pressure — a heap-sizing signal.
         # Skip anything non-numeric rather than letting one odd gauge fail the whole block.
+        # No usable gauge at all is None, not 0: a sum of nothing would report a misread
+        # metric name, or a Solr that stopped sending them, as a JVM that never collected.
         def _gc_total(suffix):
-            return sum(v for k, v in jvm.items()
-                       if k.startswith('gc.') and k.endswith(suffix) and _number(v) is not None)
+            values = [v for k, v in jvm.items()
+                      if k.startswith('gc.') and k.endswith(suffix) and _number(v) is not None]
+            return sum(values) if values else None
 
         metrics['jvm'] = {
             'heap_used_mb': _mb(heap_used),
