@@ -65,17 +65,13 @@ def test_status_shape():
     assert data['status'] == 'ok'
     assert 'numDocs' in data['solr']
 
-    # recent_queries should always be present; count/means/percentiles are None before any queries.
+    # recent_queries is always present, latencies included (they need no Solr round-trip).
     rq = data['recent_queries']
-    assert 'requests' in rq and 'window_size' in rq
-    assert 'mean_ms' in rq
-    assert 'mean_solr_wait_ms' in rq
-    # End-to-end percentiles (local, no Solr round-trip) are on the default /status path.
-    assert 'p50_ms' in rq and 'p95_ms' in rq and 'p99_ms' in rq
-    assert 'errors' in rq and 'timeouts' in rq and 'cancelled' in rq
-    # The pre-rename names must not linger alongside the new ones.
-    for old in ('max', 'count', 'mean_time_ms', 'mean_solr_time_ms', 'failed', 'timed_out'):
-        assert old not in rq
+    assert set(rq) == {'window_size', 'requests', 'errors', 'timeouts', 'cancelled',
+                       'lookup_ms', 'solr_round_trip_ms'}
+    # Grouped by what they time, so the names say which span each figure covers.
+    assert set(rq['lookup_ms']) == {'mean', 'min', 'max', 'p50', 'p95', 'p99'}
+    assert set(rq['solr_round_trip_ms']) == {'mean'}
 
     # Solr's health metrics are an extra round-trip, so they appear only with ?full=true.
     # They live under 'solr' -- never at the top level, as solr_metrics once did.
@@ -122,8 +118,13 @@ def test_status_metrics_param():
     # errors/timeouts are meters in Solr; we report just their counts.
     assert isinstance(queries['errors'], int)
     assert isinstance(queries['timeouts'], int)
-    for field in ('mean_ms', 'p50_ms', 'p95_ms', 'p99_ms'):
-        assert isinstance(queries[field], (int, float)), field
+    # Solr's handler time, grouped and named so it can't be taken for recent_queries'.
+    handler = queries['handler_ms']
+    assert set(handler) == {'mean', 'min', 'max', 'p50', 'p95', 'p99'}
+    for field, value in handler.items():
+        assert isinstance(value, (int, float)), field
+        assert value == round(value, 2), field
+    assert handler['min'] <= handler['p50'] <= handler['max']
 
     # The cache values are checked in test_status_reports_cache_metrics.
     assert 'filterCache' in solr['cache'] and 'queryResultCache' in solr['cache']
@@ -157,8 +158,8 @@ def test_status_reports_cache_metrics():
 def test_status_recent_queries_populated():
     """After a lookup, recent_queries should reflect at least one recorded time."""
     import api.server
-    # Percentiles may otherwise be reused from an earlier /status in this process.
-    api.server.recent_lookups._percentiles_at = float('-inf')
+    # The order statistics may otherwise be reused from an earlier /status in this process.
+    api.server.recent_lookups._order_stats_at = float('-inf')
     client = TestClient(app)
     # Two queries so the percentile computation (needs >= 2 samples) is exercised.
     client.get("/lookup", params={'string': 'alzheimer'})
@@ -167,9 +168,10 @@ def test_status_recent_queries_populated():
     data = response.json()
     rq = data['recent_queries']
     assert rq['requests'] >= 2
-    assert rq['mean_ms'] is not None
-    assert rq['mean_solr_wait_ms'] is not None
-    assert rq['p50_ms'] is not None and rq['p99_ms'] is not None
+    for field, value in rq['lookup_ms'].items():
+        assert value is not None, field
+    assert rq['lookup_ms']['min'] <= rq['lookup_ms']['p50'] <= rq['lookup_ms']['max']
+    assert rq['solr_round_trip_ms']['mean'] is not None
 
 
 def test_slow_query_logs_warning(monkeypatch, caplog):
@@ -352,7 +354,7 @@ def test_status_tolerates_unexpected_metric_values(monkeypatch):
     solr = client.get("/status", params={'full': 'true'}).json()['solr']
     assert 'metrics_error' not in solr
     assert solr['queries']['requests'] == 42
-    assert solr['queries']['mean_ms'] is None
+    assert solr['queries']['handler_ms']['mean'] is None
     assert solr['cache']['filterCache']['lookups'] == 9
     assert solr['cache']['filterCache']['hitratio'] is None
     assert solr['jvm']['heap_used_mb'] == 1.0
@@ -447,36 +449,41 @@ def test_recent_lookups_window():
     window.record(6_000_000, 2_000_000, 'error')   # evicts the first
     summary = window.summary()
     assert summary['requests'] == 3 and summary['window_size'] == 3
-    assert summary['mean_ms'] == round((2 + 3 + 6) / 3, 2)
-    assert summary['mean_solr_wait_ms'] == round((0.5 + 1 + 2) / 3, 2)
+    assert summary['lookup_ms']['mean'] == round((2 + 3 + 6) / 3, 2)
+    assert summary['solr_round_trip_ms']['mean'] == round((0.5 + 1 + 2) / 3, 2)
     assert summary['timeouts'] == 1 and summary['errors'] == 1 and summary['cancelled'] == 0
-    assert summary['p50_ms'] == 3.0
+    assert summary['lookup_ms']['p50'] == 3.0
+    # min and max are of what is in the window: the evicted 1 ms lookup is gone.
+    assert summary['lookup_ms']['min'] == 2.0 and summary['lookup_ms']['max'] == 6.0
 
     window.record(1_000_000, 0)   # evicts the timeout
     assert window.summary()['timeouts'] == 0
 
 
 def test_recent_lookups_percentiles_are_cached(monkeypatch):
-    """Percentiles cost a sort of the whole window, so /status reuses them for up to
-    PERCENTILE_CACHE_SECONDS rather than re-sorting on every probe."""
+    """The min, max and percentiles cost a sort of the whole window, so /status reuses them
+    for up to PERCENTILE_CACHE_SECONDS rather than re-sorting on every probe."""
     import api.server
     clock = [1000.0]
     monkeypatch.setattr(api.server.time, "monotonic", lambda: clock[0])
     window = api.server.RecentLookups(100)
 
-    # Fewer than two lookups: no percentiles, and nothing worth caching.
+    # Fewer than two lookups: min and max, but no percentiles, and nothing worth caching.
     window.record(1_000_000, 0)
-    assert window.summary()['p50_ms'] is None
+    first = window.summary()['lookup_ms']
+    assert first['min'] == first['max'] == 1.0 and first['p50'] is None
     window.record(1_000_000, 0)
-    assert window.summary()['p50_ms'] == 1.0
+    assert window.summary()['lookup_ms']['p50'] == 1.0
 
     window.record(100_000_000, 0)
     window.record(100_000_000, 0)
-    assert window.summary()['p50_ms'] == 1.0   # still the cached value
-    assert window.summary()['requests'] == 4   # but the running totals are current
+    cached = window.summary()
+    assert cached['lookup_ms']['p50'] == 1.0 and cached['lookup_ms']['max'] == 1.0   # still cached
+    assert cached['requests'] == 4 and cached['lookup_ms']['mean'] == 50.5   # but totals are current
 
     clock[0] += api.server.PERCENTILE_CACHE_SECONDS
-    assert window.summary()['p50_ms'] == 50.5
+    fresh = window.summary()['lookup_ms']
+    assert fresh['p50'] == 50.5 and fresh['max'] == 100.0
 
 
 def test_recent_lookups_percentiles_stay_within_observed_times():
@@ -486,8 +493,8 @@ def test_recent_lookups_percentiles_stay_within_observed_times():
     window = RecentLookups(100)
     window.record(1_000_000, 0)
     window.record(100_000_000, 0)
-    summary = window.summary()
-    assert 1.0 <= summary['p50_ms'] <= summary['p95_ms'] <= summary['p99_ms'] <= 100.0
+    lookup_ms = window.summary()['lookup_ms']
+    assert 1.0 == lookup_ms['min'] <= lookup_ms['p50'] <= lookup_ms['p95'] <= lookup_ms['p99'] <= lookup_ms['max'] == 100.0
 
 
 def test_recent_lookups_window_of_zero_keeps_nothing():
@@ -495,7 +502,9 @@ def test_recent_lookups_window_of_zero_keeps_nothing():
     window = RecentLookups(0)
     window.record(1_000_000, 0)
     summary = window.summary()
-    assert summary['requests'] == 0 and summary['mean_ms'] is None and summary['p50_ms'] is None
+    assert summary['requests'] == 0
+    assert all(value is None for value in summary['lookup_ms'].values())
+    assert summary['solr_round_trip_ms']['mean'] is None
 
 
 @pytest.mark.parametrize("raw", ["50k", "-1", "", "nan"])

@@ -118,7 +118,7 @@ def diagnostic_setting(name: str, default, parse):
 DEFAULT_RECENT_TIMES_COUNT = 50000
 RECENT_TIMES_COUNT = diagnostic_setting("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_COUNT, int)
 
-# How long /status may reuse the latency percentiles it last computed; see
+# How long /status may reuse the latency min, max and percentiles it last computed; see
 # RecentLookups.summary().
 PERCENTILE_CACHE_SECONDS = 10
 
@@ -128,11 +128,12 @@ class RecentLookups:
     The last `maxlen` /lookup timings and outcomes, which /status reports as recent_queries.
 
     /status is what the Kubernetes probes call, so it has to stay cheap however full the
-    window is. Everything but the percentiles is therefore a running total, updated as each
-    entry is added and evicted, rather than a pass over the window per request. Times are
-    kept as integer nanoseconds, so that those totals don't drift however many entries pass
-    through. The percentiles need a sort of the whole window (a few ms at 50000 entries,
-    on the event loop), so summary() reuses the last one for up to PERCENTILE_CACHE_SECONDS.
+    window is. The counts and means are therefore running totals, updated as each entry is
+    added and evicted, rather than a pass over the window per request. Times are kept as
+    integer nanoseconds, so that those totals don't drift however many entries pass
+    through. The min, max and percentiles need a sort of the whole window (a few ms at
+    50000 entries, on the event loop), so summary() reuses the last sort's for up to
+    PERCENTILE_CACHE_SECONDS.
 
     Everything here runs on the event loop with no await, so it needs no lock.
     """
@@ -145,11 +146,13 @@ class RecentLookups:
         self._total_ns = 0
         self._solr_ns = 0
         self._outcomes = Counter()
-        # Lookups ever recorded: tells summary() whether its cached percentiles are stale.
+        # Lookups ever recorded: tells summary() whether its cached order statistics are stale.
         self._recorded = 0
-        self._percentiles = (None, None, None)
-        self._percentiles_recorded = 0
-        self._percentiles_at = 0.0
+        self._order_stats = self._NO_ORDER_STATS
+        self._order_stats_recorded = 0
+        self._order_stats_at = 0.0
+
+    _NO_ORDER_STATS = {'min': None, 'max': None, 'p50': None, 'p95': None, 'p99': None}
 
     def record(self, total_ns: int, solr_ns: int, outcome: str = 'ok'):
         """ Add one lookup, evicting the oldest if the window is full. `outcome` is how it
@@ -167,59 +170,64 @@ class RecentLookups:
         self._outcomes[outcome] += 1
         self._recorded += 1
 
-    def _current_percentiles(self):
-        """ p50/p95/p99 in ms, recomputed only if lookups have arrived since the last
-        computation and it is more than PERCENTILE_CACHE_SECONDS old -- or it was made
-        before there were the two lookups that percentiles need. """
+    def _current_order_stats(self) -> Dict:
+        """ min, max, p50, p95 and p99 of the lookup times, in ms. Recomputed only if lookups
+        have arrived since the last computation and it is more than PERCENTILE_CACHE_SECONDS
+        old -- or it was made before there were the two lookups that percentiles need. """
         now = time.monotonic()
-        stale = self._recorded != self._percentiles_recorded and (
-            self._percentiles[0] is None or now - self._percentiles_at >= PERCENTILE_CACHE_SECONDS)
+        stale = self._recorded != self._order_stats_recorded and (
+            self._order_stats['p50'] is None or now - self._order_stats_at >= PERCENTILE_CACHE_SECONDS)
         if stale:
-            if len(self._entries) >= 2:
+            times = sorted(entry[0] for entry in self._entries)
+            stats = dict(self._NO_ORDER_STATS)
+            if times:
+                stats['min'], stats['max'] = times[0], times[-1]
+            if len(times) >= 2:
                 # 'inclusive' keeps every percentile within the observed times. The default
                 # ('exclusive') extrapolates past them in a small window: 1 ms and 100 ms
                 # lookups gave a p99 of 196 ms, a delay no caller had.
-                qs = statistics.quantiles([entry[0] for entry in self._entries], n=100,
-                                          method='inclusive')
-                self._percentiles = tuple(round(qs[i] / 1_000_000, 2) for i in (49, 94, 98))
-            else:
-                self._percentiles = (None, None, None)
-            self._percentiles_recorded = self._recorded
-            self._percentiles_at = now
-        return self._percentiles
+                qs = statistics.quantiles(times, n=100, method='inclusive')
+                stats['p50'], stats['p95'], stats['p99'] = qs[49], qs[94], qs[98]
+            self._order_stats = {k: None if v is None else round(v / 1_000_000, 2)
+                                 for k, v in stats.items()}
+            self._order_stats_recorded = self._recorded
+            self._order_stats_at = now
+        return self._order_stats
 
     def summary(self) -> Dict:
         """ The recent_queries block of /status. """
         count = len(self._entries)
-        p50, p95, p99 = self._current_percentiles()
-        # Named to match solr.queries for the latencies, which measure the same thing on
-        # either side of the Solr round trip. The counts don't compare directly: these
-        # cover the window, while solr.queries' count from Solr's start.
+
+        def _mean_ms(total_ns):
+            return round(total_ns / count / 1_000_000, 2) if count else None
+
+        # The latencies are grouped by what they time, and named for it, so that nobody
+        # reading /status takes lookup_ms for solr.queries.handler_ms: they time different
+        # spans, and the gap between them is NameRes's own overhead. The counts aren't
+        # comparable with solr.queries' either: these cover the window, Solr's count from
+        # its start.
         return {
             # The window's capacity (RECENT_TIMES_COUNT), not a latency.
             'window_size': self.maxlen,
             'requests': count,
-            'mean_ms': round(self._total_ns / count / 1_000_000, 2) if count else None,
-            # The part of the above spent waiting for Solr, as the lookup log line's
-            # "waiting for Solr" figure. No solr.queries counterpart: Solr can't see the
-            # round trip.
-            'mean_solr_wait_ms': round(self._solr_ns / count / 1_000_000, 2) if count else None,
-            # These measure the full round-trip the caller sees (including NameRes
-            # processing), so comparing them against Solr's own solr.queries percentiles
-            # localizes a latency tail to Solr vs. NameRes.
-            'p50_ms': p50,
-            'p95_ms': p95,
-            'p99_ms': p99,
             # Lookups in the window that failed, split by how: `timeouts` hit
             # SOLR_TIMEOUT_SECONDS, `cancelled` were abandoned while waiting on Solr (a
             # server shutdown, say), and `errors` are everything else (Solr returned an
             # error, or couldn't be reached). Disjoint, so their sum is every failure.
-            # Their times are in the figures above: a failed lookup kept its caller
+            # Their times are in the figures below: a failed lookup kept its caller
             # waiting too. Not the same as solr.queries.timeouts, which counts only
             # requests Solr itself cut short.
             'errors': self._outcomes['error'],
             'timeouts': self._outcomes['timeout'],
             'cancelled': self._outcomes['cancelled'],
+            # The whole of lookup(): Solr round trip plus building the results. It doesn't
+            # include FastAPI's handling of the request or the network to the caller.
+            'lookup_ms': {'mean': _mean_ms(self._total_ns), **self._current_order_stats()},
+            # The part of lookup_ms spent on the Solr request, as NameRes sees it: setting
+            # up the HTTP client and connection, Solr's handling (solr.queries.handler_ms),
+            # the response's transfer, and decoding its JSON. The lookup log line's
+            # "waiting for Solr" figure.
+            'solr_round_trip_ms': {'mean': _mean_ms(self._solr_ns)},
         }
 
 
@@ -346,10 +354,15 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
                 'requests': _count(core_data.get('QUERY./select.requests')),
                 'errors': _count(core_data.get('QUERY./select.errors')),
                 'timeouts': _count(core_data.get('QUERY./select.timeouts')),
-                'mean_ms': _number(qh.get('mean_ms')),
-                'p50_ms': _number(qh.get('median_ms')),
-                'p95_ms': _number(qh.get('p95_ms')),
-                'p99_ms': _number(qh.get('p99_ms')),
+                # Time inside Solr's /select handler only, from Solr's request timer, which
+                # samples roughly the last few minutes. No network, no connection setup,
+                # no response writing: compare recent_queries.solr_round_trip_ms for those.
+                # Rounded to 2 places, like recent_queries.
+                'handler_ms': {
+                    name: round(v, 2) if (v := _number(qh.get(f'{solr_name}_ms'))) is not None else None
+                    for name, solr_name in (('mean', 'mean'), ('min', 'min'), ('max', 'max'),
+                                            ('p50', 'median'), ('p95', 'p95'), ('p99', 'p99'))
+                },
             }
             metrics['cache'] = {
                 'filterCache': _cache('filterCache'),
