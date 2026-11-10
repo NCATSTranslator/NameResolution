@@ -27,7 +27,7 @@ Solr in a way a `/lookup` caller's doesn't.
 |---|---|
 | `mean_ms` | Average round-trip time (Python → Solr → Python) over the last `requests` `/lookup` queries. Rising mean = sustained slowdown. |
 | `mean_solr_wait_ms` | Of that, the average time spent waiting on Solr. If this is close to `mean_ms`, the bottleneck is inside Solr; if it is much smaller, the bottleneck is Python-side result processing. |
-| `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `solr.queries` percentiles localizes a latency tail: if the end-to-end `p99_ms` is far above `solr.queries.p99_ms`, the tail is in NameRes (result processing, GC in the Python process), not Solr. Computed locally, so they need no `?full=true` round-trip; they cost a sort of the whole window, though, so `/status` reuses them for up to 10 seconds. |
+| `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `solr.queries` percentiles helps localize a latency tail: an end-to-end `p99_ms` far above `solr.queries.p99_ms` points at NameRes (result processing, GC in the Python process) rather than Solr. It's a pointer, not proof: the two cover different traffic and periods, and these include failures and network time (see Step 5 of the decision tree). Computed locally, so they need no `?full=true` round-trip; they cost a sort of the whole window, though, so `/status` reuses them for up to 10 seconds. |
 | `requests` / `window_size` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). Unlike `solr.queries.requests`, `requests` is windowed, not cumulative, so the two can't be compared. |
 | `errors` / `timeouts` / `cancelled` | Queries in the window that failed: `timeouts` hit `SOLR_TIMEOUT_SECONDS`, `cancelled` were abandoned while waiting on Solr (a server shutdown, say), and `errors` are the rest (Solr returned an error or couldn't be reached). They are disjoint, so their sum is every failure. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `p99_ms` too. |
 
@@ -220,8 +220,15 @@ Solr seems slow or the service is unresponsive
      │      lining up with the slow window). Fix: tune GC_TUNE in the chart's values
      │      (-XX:+UseG1GC -XX:MaxGCPauseMillis=...).
      │
-     ├─ recent_queries.p99_ms >> solr.queries.p99_ms → the tail is in NameRes, not Solr
-     │    (large result sets, Python-side GC). Check `limit`; scale the API horizontally.
+     ├─ recent_queries.p99_ms >> solr.queries.p99_ms → the tail is probably outside Solr,
+     │    but the two aren't like for like: recent_queries covers /lookup only over the
+     │    last RECENT_TIMES_COUNT lookups (perhaps hours), and its times include failures
+     │    and the network; solr.queries covers every /select over the last few minutes.
+     │    Rule those out first: timeouts or errors in recent_queries inflate its p99; an
+     │    earlier Solr slowdown can still be in the window; and a mean_solr_wait_ms that
+     │    is most of mean_ms puts the time on the Solr round trip, not in Python. If they
+     │    are ruled out, the tail is in NameRes (large result sets, Python-side GC):
+     │    check `limit`, and scale the API horizontally.
      │
      └─ Both p50 and p99 high → sustained overload at all percentiles
           → start with memory (Step 3), then CPU (Step 4)
