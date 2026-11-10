@@ -88,26 +88,142 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# We track the time taken for each Solr query for the last N queries so we can track performance via /status.
-# 50000 floats per deque is only a few MB of memory but gives a much longer performance window than 1000 did.
+def diagnostic_setting(name: str, default, parse):
+    """
+    Read a diagnostics-only setting from the environment, falling back to `default` (with a
+    warning) if it is missing, malformed or negative.
+
+    Unlike the settings in Config, which change what the service returns and so ought to
+    stop it starting when they're wrong, these only tune what /status and the logs report.
+    A typo in one of them ('50k', '-1') shouldn't keep the API container from starting.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = parse(raw)
+    except ValueError:
+        value = None
+    # `not >= 0` rather than `< 0`, so that a NaN is turned away too.
+    if value is None or not value >= 0:
+        logger.warning("Ignoring %s=%r: expected a non-negative number; using %r instead.",
+                       name, raw, default)
+        return default
+    return value
+
+
+# We keep the last RECENT_TIMES_COUNT lookups' timings so /status can report on them as
+# recent_queries. 50000 entries is only a few MB of memory but gives a much longer
+# performance window than 1000 did. 0 keeps nothing.
 DEFAULT_RECENT_TIMES_COUNT = 50000
-RECENT_TIMES_COUNT = int(os.getenv("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_COUNT))
-recent_query_times = deque(maxlen=RECENT_TIMES_COUNT)
-recent_solr_times = deque(maxlen=RECENT_TIMES_COUNT)
-# 'ok', 'error' or 'timeout' for each of the same queries, so /status can say how many of the
-# timings in the window belong to lookups that failed.
-recent_query_outcomes = deque(maxlen=RECENT_TIMES_COUNT)
+RECENT_TIMES_COUNT = diagnostic_setting("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_COUNT, int)
+
+# How long /status may reuse the latency percentiles it last computed; see
+# RecentLookups.summary().
+PERCENTILE_CACHE_SECONDS = 10
 
 
-def record_lookup_time(time_taken_ms: float, time_taken_ms_solr: float, outcome: str = 'ok'):
-    """ Add one /lookup to the window that /status reports as recent_queries. """
-    recent_query_times.append(time_taken_ms)
-    recent_solr_times.append(time_taken_ms_solr)
-    recent_query_outcomes.append(outcome)
+class RecentLookups:
+    """
+    The last `maxlen` /lookup timings and outcomes, which /status reports as recent_queries.
+
+    /status is what the Kubernetes probes call, so it has to stay cheap however full the
+    window is. Everything but the percentiles is therefore a running total, updated as each
+    entry is added and evicted, rather than a pass over the window per request. Times are
+    kept as integer nanoseconds, so that those totals don't drift however many entries pass
+    through. The percentiles need a sort of the whole window (a few ms at 50000 entries,
+    on the event loop), so summary() reuses the last one for up to PERCENTILE_CACHE_SECONDS.
+
+    Everything here runs on the event loop with no await, so it needs no lock.
+    """
+
+    def __init__(self, maxlen: int):
+        self.maxlen = maxlen
+        # (total_ns, solr_ns, outcome) per lookup, oldest first. Evicted by hand, not by
+        # deque(maxlen=...), so that the totals below can subtract what leaves.
+        self._entries = deque()
+        self._total_ns = 0
+        self._solr_ns = 0
+        self._outcomes = Counter()
+        # Lookups ever recorded: tells summary() whether its cached percentiles are stale.
+        self._recorded = 0
+        self._percentiles = (None, None, None)
+        self._percentiles_recorded = 0
+        self._percentiles_at = 0.0
+
+    def record(self, total_ns: int, solr_ns: int, outcome: str = 'ok'):
+        """ Add one lookup, evicting the oldest if the window is full. `outcome` is how it
+        ended: 'ok', or one of the failures 'error', 'timeout' and 'cancelled'. """
+        if self.maxlen <= 0:
+            return
+        if len(self._entries) >= self.maxlen:
+            old_total_ns, old_solr_ns, old_outcome = self._entries.popleft()
+            self._total_ns -= old_total_ns
+            self._solr_ns -= old_solr_ns
+            self._outcomes[old_outcome] -= 1
+        self._entries.append((total_ns, solr_ns, outcome))
+        self._total_ns += total_ns
+        self._solr_ns += solr_ns
+        self._outcomes[outcome] += 1
+        self._recorded += 1
+
+    def _current_percentiles(self):
+        """ p50/p95/p99 in ms, recomputed only if lookups have arrived since the last
+        computation and it is more than PERCENTILE_CACHE_SECONDS old -- or it was made
+        before there were the two lookups that percentiles need. """
+        now = time.monotonic()
+        stale = self._recorded != self._percentiles_recorded and (
+            self._percentiles[0] is None or now - self._percentiles_at >= PERCENTILE_CACHE_SECONDS)
+        if stale:
+            if len(self._entries) >= 2:
+                qs = statistics.quantiles([entry[0] for entry in self._entries], n=100)
+                self._percentiles = tuple(round(qs[i] / 1_000_000, 2) for i in (49, 94, 98))
+            else:
+                self._percentiles = (None, None, None)
+            self._percentiles_recorded = self._recorded
+            self._percentiles_at = now
+        return self._percentiles
+
+    def summary(self) -> Dict:
+        """ The recent_queries block of /status. """
+        count = len(self._entries)
+        p50, p95, p99 = self._current_percentiles()
+        # Named to match solr.queries for the latencies, which measure the same thing on
+        # either side of the Solr round trip. The counts don't compare directly: these
+        # cover the window, while solr.queries' count from Solr's start.
+        return {
+            # The window's capacity (RECENT_TIMES_COUNT), not a latency.
+            'window_size': self.maxlen,
+            'requests': count,
+            'mean_ms': round(self._total_ns / count / 1_000_000, 2) if count else None,
+            # The part of the above spent waiting for Solr, as the lookup log line's
+            # "waiting for Solr" figure. No solr.queries counterpart: Solr can't see the
+            # round trip.
+            'mean_solr_wait_ms': round(self._solr_ns / count / 1_000_000, 2) if count else None,
+            # These measure the full round-trip the caller sees (including NameRes
+            # processing), so comparing them against Solr's own solr.queries percentiles
+            # localizes a latency tail to Solr vs. NameRes.
+            'p50_ms': p50,
+            'p95_ms': p95,
+            'p99_ms': p99,
+            # Lookups in the window that failed, split by how: `timeouts` hit
+            # SOLR_TIMEOUT_SECONDS, `cancelled` were abandoned while waiting on Solr (a
+            # server shutdown, say), and `errors` are everything else (Solr returned an
+            # error, or couldn't be reached). Disjoint, so their sum is every failure.
+            # Their times are in the figures above: a failed lookup kept its caller
+            # waiting too. Not the same as solr.queries.timeouts, which counts only
+            # requests Solr itself cut short.
+            'errors': self._outcomes['error'],
+            'timeouts': self._outcomes['timeout'],
+            'cancelled': self._outcomes['cancelled'],
+        }
+
+
+recent_lookups = RecentLookups(RECENT_TIMES_COUNT)
 
 # Lookups slower than this (end-to-end, in ms) are logged at WARNING instead of INFO,
 # so slow queries stand out in the logs. See documentation/Performance.md.
-SLOW_QUERY_THRESHOLD_MS = float(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
+SLOW_QUERY_THRESHOLD_MS = diagnostic_setting("SLOW_QUERY_THRESHOLD_MS", 500.0, float)
 
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
@@ -326,40 +442,9 @@ async def status(full: bool = False) -> Dict:
     openapi_version = get_app_info().get('version') or ''
     nameres_version = 'v' + openapi_version if openapi_version else 'master'
 
-    # Prepare recent times for reporting.
-    # End-to-end latency percentiles over the window. These measure the full round-trip
-    # the caller sees (including NameRes processing), so comparing them against Solr's own
-    # solr.queries percentiles localizes a latency tail to Solr vs. NameRes. Computed from
-    # local data (no Solr round-trip), so they stay on the default /status path.
-    if len(recent_query_times) >= 2:
-        qs = statistics.quantiles(recent_query_times, n=100)
-        p50, p95, p99 = round(qs[49], 2), round(qs[94], 2), round(qs[98], 2)
-    else:
-        p50 = p95 = p99 = None
-
-    outcomes = Counter(recent_query_outcomes)
-    # Named to match solr.queries wherever the two measure the same kind of thing, so the
-    # NameRes-side and Solr-side figures can be read side by side.
-    recent_queries = {
-        # The window's capacity (RECENT_TIMES_COUNT), not a latency.
-        'window_size': RECENT_TIMES_COUNT,
-        'requests': len(recent_query_times),
-        'mean_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
-        # The part of the above spent waiting for Solr, as the lookup log line's "waiting
-        # for Solr" figure. No solr.queries counterpart: Solr can't see the round trip.
-        'mean_solr_wait_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
-        'p50_ms': p50,
-        'p95_ms': p95,
-        'p99_ms': p99,
-        # Lookups in the window that failed, split by how: `timeouts` hit
-        # SOLR_TIMEOUT_SECONDS, `errors` are everything else (Solr returned an error, or
-        # couldn't be reached). Disjoint, so errors + timeouts is every failure. Their
-        # times are in the figures above: a timed-out lookup kept its caller waiting too.
-        # Not the same as solr.queries.timeouts, which counts only requests Solr itself
-        # cut short.
-        'errors': outcomes['error'],
-        'timeouts': outcomes['timeout'],
-    }
+    # Computed from NameRes's own record of its lookups (no Solr round-trip), so it stays on
+    # the default /status path.
+    recent_queries = recent_lookups.summary()
 
     # We should have a status for our core. Standalone Solr calls it $SOLR_CORE
     # (name_lookup); the older cloud-mode backups called it
@@ -750,9 +835,17 @@ async def lookup(string: str,
            debug: DebugOptions = 'none',
            exact: Optional[ExactMatchMode] = None,
            raise_on_too_short: bool = False,
+           bulk: bool = False,
 ) -> List[LookupResult]:
     """
     Returns cliques with a name or synonym that contains a specified string.
+
+    :param bulk: This lookup is one string of a /bulk-lookup. It is then left out of
+        recent_queries, which describes /lookup: a single bulk request can hold thousands of
+        strings, enough to swamp the window, and its strings compete with each other for Solr
+        while a /lookup caller's doesn't. For the same reason a slow string is logged at INFO
+        rather than as a SLOW QUERY warning, so that one bulk request against a struggling
+        Solr can't bury the log in them. Failures are still logged at WARNING.
 
     :param autocomplete: Should we do the lookup in autocomplete mode (in which we expect the final word to be
         incomplete) or not (in which the entire phrase is expected to be complete, i.e. as an entity linker)?
@@ -981,15 +1074,23 @@ async def lookup(string: str,
             logger.error("Solr REST error: %s", response.text)
             response.raise_for_status()
         response = response.json()
-    except Exception as e:
+    except BaseException as e:
         # A failed lookup still has to be timed. The ones that hit SOLR_TIMEOUT_SECONDS are the
         # slowest requests of all, so recording times only on success would leave them out of
         # recent_queries -- and out of the log -- and make /status look healthiest exactly when
-        # Solr is struggling.
+        # Solr is struggling. BaseException rather than Exception so that a lookup cancelled
+        # while it waits on Solr (asyncio.CancelledError) is timed too: those are slow ones
+        # as well. It is re-raised below, so nothing is swallowed.
         time_failed = time.time_ns()
         time_taken_ms = (time_failed - time_start)/1_000_000
-        outcome = 'timeout' if isinstance(e, httpx.TimeoutException) else 'error'
-        record_lookup_time(time_taken_ms, (time_failed - time_solr_start)/1_000_000, outcome)
+        if isinstance(e, httpx.TimeoutException):
+            outcome = 'timeout'
+        elif isinstance(e, asyncio.CancelledError):
+            outcome = 'cancelled'
+        else:
+            outcome = 'error'
+        if not bulk:
+            recent_lookups.record(time_failed - time_start, time_failed - time_solr_start, outcome)
         logger.warning(f"FAILED QUERY ({outcome}: {type(e).__name__}): {log_msg_prefix}: "
                        f"failed after {time_taken_ms:.2f}ms")
         raise
@@ -1081,10 +1182,11 @@ async def lookup(string: str,
     time_end = time.time_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
     time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
-    record_lookup_time(time_taken_ms, time_taken_ms_solr)
+    if not bulk:
+        recent_lookups.record(time_end - time_start, time_solr_end - time_solr_start)
     log_msg = (f"{log_msg_prefix}: "
                f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms waiting for Solr)")
-    if time_taken_ms > SLOW_QUERY_THRESHOLD_MS:
+    if time_taken_ms > SLOW_QUERY_THRESHOLD_MS and not bulk:
         logger.warning("SLOW QUERY: " + log_msg)
     else:
         logger.info(log_msg)
@@ -1190,6 +1292,7 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
                 query.only_taxa,
                 query.debug,
                 query.exact,
+                bulk=True,
             )
         return string, results
 

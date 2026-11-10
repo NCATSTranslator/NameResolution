@@ -18,16 +18,18 @@ NameRes log has the details. See
 
 ### Frontend query metrics (`recent_queries`)
 
-Tracked by the Python process; reflects the full round-trip time seen by callers. Always
-present (no `?full=true` needed).
+Tracked by the Python process; reflects the full round-trip time seen by callers of `/lookup`.
+Always present (no `?full=true` needed). `/bulk-lookup` is left out: one bulk request can hold
+thousands of strings, enough to swamp the window, and its strings compete with each other for
+Solr in a way a `/lookup` caller's doesn't.
 
 | Field | What it means |
 |---|---|
 | `mean_ms` | Average round-trip time (Python → Solr → Python) over the last `requests` `/lookup` queries. Rising mean = sustained slowdown. |
 | `mean_solr_wait_ms` | Of that, the average time spent waiting on Solr. If this is close to `mean_ms`, the bottleneck is inside Solr; if it is much smaller, the bottleneck is Python-side result processing. |
-| `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `solr.queries` percentiles localizes a latency tail: if the end-to-end `p99_ms` is far above `solr.queries.p99_ms`, the tail is in NameRes (result processing, GC in the Python process), not Solr. Computed locally, so they need no `?full=true` round-trip. |
-| `requests` / `window_size` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). |
-| `errors` / `timeouts` | Queries in the window that failed: `timeouts` hit `SOLR_TIMEOUT_SECONDS`, `errors` are the rest (Solr returned an error or couldn't be reached). The two are disjoint, so their sum is every failure. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `p99_ms` too. |
+| `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `solr.queries` percentiles localizes a latency tail: if the end-to-end `p99_ms` is far above `solr.queries.p99_ms`, the tail is in NameRes (result processing, GC in the Python process), not Solr. Computed locally, so they need no `?full=true` round-trip; they cost a sort of the whole window, though, so `/status` reuses them for up to 10 seconds. |
+| `requests` / `window_size` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). Unlike `solr.queries.requests`, `requests` is windowed, not cumulative, so the two can't be compared. |
+| `errors` / `timeouts` / `cancelled` | Queries in the window that failed: `timeouts` hit `SOLR_TIMEOUT_SECONDS`, `cancelled` were abandoned while waiting on Solr (a server shutdown, say), and `errors` are the rest (Solr returned an error or couldn't be reached). They are disjoint, so their sum is every failure. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `p99_ms` too. |
 
 ### Solr queries (`solr.queries`)
 
@@ -95,7 +97,9 @@ combinations that defeat caching.
 ## 2. Log messages
 
 Every `lookup()` call emits a line at INFO — or WARNING if it exceeds `SLOW_QUERY_THRESHOLD_MS`
-(default 500 ms):
+(default 500 ms). The strings of a `/bulk-lookup` stay at INFO however slow they are, so that one
+large bulk request against a struggling Solr can't bury the log in SLOW QUERY warnings; it ends
+with one `Bulk lookup query for N strings` line giving the total time. For example:
 
 ```
 INFO: Lookup query to Solr for "diabetes" (autocomplete=False, ... only_taxa=None):
@@ -104,8 +108,9 @@ INFO: Lookup query to Solr for "diabetes" (autocomplete=False, ... only_taxa=Non
 WARNING: SLOW QUERY: Lookup query to Solr for "..." ... took 850.12ms (with 840.00ms waiting for Solr)
 ```
 
-A lookup that fails instead logs at WARNING with the outcome (`timeout` or `error`) and the
-exception type, before the exception becomes an HTTP 500:
+A lookup that fails instead logs at WARNING with the outcome (`timeout`, `cancelled` or `error`)
+and the exception type, before the exception is re-raised (and, unless it was cancelled, becomes
+an HTTP 500). Bulk strings that fail are logged this way too:
 
 ```
 WARNING: FAILED QUERY (timeout: ReadTimeout): Lookup query to Solr for "..." ...: failed after 60012.40ms
@@ -227,6 +232,6 @@ Solr seems slow or the service is unresponsive
 | `SOLR_CORE` | `name_lookup` | Solr core to query |
 | `SOLR_MAX_CONCURRENT_LOOKUPS` | `100` | Most Solr queries a single `/bulk-lookup` request keeps in flight (see [Deployment.md](./Deployment.md)) |
 | `SOLR_TIMEOUT_SECONDS` | `60` | Per-query Solr timeout, also applied to `/status`; `0` waits forever |
-| `RECENT_TIMES_COUNT` | `50000` | How many recent `/lookup` timings to retain for `recent_queries`. Lower it to reduce memory on low-traffic instances. |
-| `SLOW_QUERY_THRESHOLD_MS` | `500` | `/lookup` queries slower than this (end-to-end) are logged at WARNING |
+| `RECENT_TIMES_COUNT` | `50000` | How many recent `/lookup` timings to retain for `recent_queries`. Lower it to reduce memory on low-traffic instances; `0` keeps none. A malformed or negative value logs a warning and falls back to the default, rather than stopping the API from starting. |
+| `SLOW_QUERY_THRESHOLD_MS` | `500` | `/lookup` queries slower than this (end-to-end) are logged at WARNING. Falls back to the default like `RECENT_TIMES_COUNT`. |
 | `LOGLEVEL` | `INFO` | Set to `DEBUG` to log full Solr request/response JSON for every query |

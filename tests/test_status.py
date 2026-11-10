@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import math
 
 import httpx
 import pytest
@@ -70,7 +72,7 @@ def test_status_shape():
     assert 'mean_solr_wait_ms' in rq
     # End-to-end percentiles (local, no Solr round-trip) are on the default /status path.
     assert 'p50_ms' in rq and 'p95_ms' in rq and 'p99_ms' in rq
-    assert 'errors' in rq and 'timeouts' in rq
+    assert 'errors' in rq and 'timeouts' in rq and 'cancelled' in rq
     # The pre-rename names must not linger alongside the new ones.
     for old in ('max', 'count', 'mean_time_ms', 'mean_solr_time_ms', 'failed', 'timed_out'):
         assert old not in rq
@@ -153,6 +155,9 @@ def test_status_reports_cache_metrics():
 
 def test_status_recent_queries_populated():
     """After a lookup, recent_queries should reflect at least one recorded time."""
+    import api.server
+    # Percentiles may otherwise be reused from an earlier /status in this process.
+    api.server.recent_lookups._percentiles_at = float('-inf')
     client = TestClient(app)
     # Two queries so the percentile computation (needs >= 2 samples) is exercised.
     client.get("/lookup", params={'string': 'alzheimer'})
@@ -380,3 +385,111 @@ def test_status_reports_missing_core_metrics(monkeypatch):
     assert 'queries' not in solr and 'cache' not in solr
     assert solr['os']['available_processors'] == 4
 
+
+def test_bulk_lookup_is_not_in_recent_queries(monkeypatch, caplog):
+    """recent_queries describes /lookup. A single /bulk-lookup can hold thousands of
+    strings, so it would swamp the window -- and, with every slow string a SLOW QUERY
+    warning, the log."""
+    import api.server
+    monkeypatch.setattr(api.server, "SLOW_QUERY_THRESHOLD_MS", 0)
+    client = TestClient(app)
+    before = client.get("/status").json()['recent_queries']['requests']
+    with caplog.at_level(logging.INFO, logger="api.server"):
+        response = client.post("/bulk-lookup", json={'strings': ['alzheimer', 'diabetes']})
+    assert response.status_code == 200
+    assert client.get("/status").json()['recent_queries']['requests'] == before
+    # Each string is still logged, at INFO.
+    lookup_lines = [r for r in caplog.records if "Lookup query to Solr" in r.getMessage()]
+    assert len(lookup_lines) == 2
+    assert not any("SLOW QUERY" in r.getMessage() for r in caplog.records)
+
+
+def test_cancelled_lookup_is_recorded(monkeypatch, caplog):
+    """A lookup cancelled while it waits on Solr is timed and counted as `cancelled`.
+    CancelledError is a BaseException, which an `except Exception` lets past."""
+    import api.server
+
+    async def cancelled_post(self, url, **kwargs):
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(httpx.AsyncClient, "post", cancelled_post)
+
+    before = api.server.recent_lookups.summary()
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(api.server.lookup('alzheimer'))
+    after = api.server.recent_lookups.summary()
+    assert after['cancelled'] == before['cancelled'] + 1
+    assert after['errors'] == before['errors'] and after['timeouts'] == before['timeouts']
+    assert any("FAILED QUERY (cancelled" in r.getMessage() for r in caplog.records)
+
+
+def test_recent_lookups_window():
+    """The running totals stay exact as entries are evicted, and match a recomputation."""
+    from api.server import RecentLookups
+    window = RecentLookups(3)
+    window.record(1_000_000, 500_000)
+    window.record(2_000_000, 500_000, 'timeout')
+    window.record(3_000_000, 1_000_000)
+    window.record(6_000_000, 2_000_000, 'error')   # evicts the first
+    summary = window.summary()
+    assert summary['requests'] == 3 and summary['window_size'] == 3
+    assert summary['mean_ms'] == round((2 + 3 + 6) / 3, 2)
+    assert summary['mean_solr_wait_ms'] == round((0.5 + 1 + 2) / 3, 2)
+    assert summary['timeouts'] == 1 and summary['errors'] == 1 and summary['cancelled'] == 0
+    assert summary['p50_ms'] == 3.0
+
+    window.record(1_000_000, 0)   # evicts the timeout
+    assert window.summary()['timeouts'] == 0
+
+
+def test_recent_lookups_percentiles_are_cached(monkeypatch):
+    """Percentiles cost a sort of the whole window, so /status reuses them for up to
+    PERCENTILE_CACHE_SECONDS rather than re-sorting on every probe."""
+    import api.server
+    clock = [1000.0]
+    monkeypatch.setattr(api.server.time, "monotonic", lambda: clock[0])
+    window = api.server.RecentLookups(100)
+
+    # Fewer than two lookups: no percentiles, and nothing worth caching.
+    window.record(1_000_000, 0)
+    assert window.summary()['p50_ms'] is None
+    window.record(1_000_000, 0)
+    assert window.summary()['p50_ms'] == 1.0
+
+    window.record(100_000_000, 0)
+    window.record(100_000_000, 0)
+    assert window.summary()['p50_ms'] == 1.0   # still the cached value
+    assert window.summary()['requests'] == 4   # but the running totals are current
+
+    clock[0] += api.server.PERCENTILE_CACHE_SECONDS
+    assert window.summary()['p50_ms'] == 50.5
+
+
+def test_recent_lookups_window_of_zero_keeps_nothing():
+    from api.server import RecentLookups
+    window = RecentLookups(0)
+    window.record(1_000_000, 0)
+    summary = window.summary()
+    assert summary['requests'] == 0 and summary['mean_ms'] is None and summary['p50_ms'] is None
+
+
+@pytest.mark.parametrize("raw", ["50k", "-1", "", "nan"])
+def test_malformed_diagnostic_setting_falls_back(monkeypatch, caplog, raw):
+    """A typo in RECENT_TIMES_COUNT or SLOW_QUERY_THRESHOLD_MS mustn't stop the API from
+    starting: they only tune what /status and the logs report."""
+    from api.server import diagnostic_setting
+    monkeypatch.setenv("NAMERES_TEST_SETTING", raw)
+    parse = float if raw == "nan" else int
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        assert diagnostic_setting("NAMERES_TEST_SETTING", 7, parse) == 7
+    assert any("NAMERES_TEST_SETTING" in r.getMessage() for r in caplog.records)
+
+
+def test_diagnostic_setting_reads_valid_values(monkeypatch):
+    from api.server import diagnostic_setting
+    monkeypatch.delenv("NAMERES_TEST_SETTING", raising=False)
+    assert diagnostic_setting("NAMERES_TEST_SETTING", 7, int) == 7
+    monkeypatch.setenv("NAMERES_TEST_SETTING", "0")
+    assert diagnostic_setting("NAMERES_TEST_SETTING", 7, int) == 0
+    monkeypatch.setenv("NAMERES_TEST_SETTING", "250.5")
+    assert math.isclose(diagnostic_setting("NAMERES_TEST_SETTING", 7.0, float), 250.5)
