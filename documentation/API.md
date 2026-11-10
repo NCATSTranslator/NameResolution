@@ -235,6 +235,7 @@ POST `/bulk-lookup` with body:
 - This endpoint is useful for batch processing multiple queries at once, which can be more efficient than making multiple `/lookup` requests.
 - All results for a given string share the same filter and search parameters.
 - The individual lookups behind a single request are sent to Solr concurrently, up to a bounded number at a time (`SOLR_MAX_CONCURRENT_LOOKUPS`, default 100). Results are still returned keyed by the input string, so the response does not depend on the order in which they complete. Note that the bound applies per request, so the total number of queries this service has in flight against Solr is that limit multiplied by the number of bulk lookups being served at once.
+- If any one string's lookup fails, the whole request fails (HTTP 500) and the strings still being looked up are cancelled.
 
 ### Exact matching
 
@@ -359,12 +360,6 @@ apart.
 reported under the same key by [NodeNorm's `/status`](https://github.com/NCATSTranslator/NodeNormalization).
 `nameres_version` is the same value with a leading `v`, and is retained for consumers that already read it.
 
-`solr` collects what NameRes reads from its Solr core: the name of the `core` it is reporting on, the core's
-`startTime`, and the index's `numDocs`, `maxDoc`, `deletedDocs`, `version`, `segmentCount`, `lastModified` and `size`.
-`solr.version` is Solr's index version counter, not a release of anything. The key is named after `backend`'s value.
-It is absent when the expected core is not found (`"status": "error"`). **Before NameRes v1.8.0 these fields were at
-the top level**, and `solr.version` was the top-level `version`.
-
 The `config` object reports publicly-relevant configuration for this instance; currently just
 `minimum_query_length`, the shortest query (in characters, after whitespace is stripped) that `/lookup` and
 `/bulk-lookup` will search for in the default tokenized search. It defaults to 2 and can be set per deployment with the
@@ -388,6 +383,29 @@ accepts any non-empty string.
   "config": {
     "minimum_query_length": 2
   },
+  "recent_queries": {
+    "window_size": 50000,
+    "requests": 50000,
+    "errors": 0,
+    "timeouts": 0,
+    "cancelled": 0,
+    "lookup_ms": {
+      "mean": 52.3,
+      "min": 3.1,
+      "max": 2140.6,
+      "p50": 31.0,
+      "p95": 150.5,
+      "p99": 420.2
+    },
+    "solr_round_trip_ms": {
+      "mean": 48.1,
+      "min": 1.2,
+      "max": 2100.3,
+      "p50": 27.4,
+      "p95": 141.0,
+      "p99": 401.8
+    }
+  },
   "solr": {
     "core": "name_lookup",
     "startTime": "2025-12-19T11:53:09.638Z",
@@ -397,7 +415,67 @@ accepts any non-empty string.
     "version": 34838,
     "segmentCount": 57,
     "lastModified": "2025-09-24T19:09:56.524Z",
-    "size": "142.17 GB"
+    "size": "142.17 GB",
+    "queries": {
+      "requests": 9842301,
+      "errors": 0,
+      "timeouts": 0,
+      "handler_ms": {
+        "mean": 41.2,
+        "min": 0.4,
+        "max": 1830.2,
+        "p50": 30.0,
+        "p95": 120.3,
+        "p99": 340.7
+      }
+    },
+    "cache": {
+      "filterCache": {
+        "hitratio": 0.94,
+        "lookups": 8200000,
+        "hits": 7708000,
+        "evictions": 2100,
+        "size": 8192
+      },
+      "queryResultCache": {
+        "hitratio": 0.91,
+        "lookups": 5400000,
+        "hits": 4914000,
+        "evictions": 1240,
+        "size": 512
+      }
+    },
+    "jvm": {
+      "heap_used_mb": 4096.0,
+      "heap_max_mb": 8192.0,
+      "heap_used_pct": 50.0,
+      "cpu_load": 0.12,
+      "gc_count": 18342,
+      "gc_time_ms": 91260
+    },
+    "os": {
+      "available_processors": 8,
+      "system_load_average": 3.4,
+      "system_cpu_load": 0.42,
+      "total_physical_mem_mb": 65536.0
+    }
   }
 }
 ```
+
+`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `/bulk-lookup` is left out: a single bulk request can hold thousands of strings, enough to swamp the window, and they compete with each other for Solr in a way a `/lookup` doesn't. `window_size` is the size of the tracking window (default 50000, configurable via the `RECENT_TIMES_COUNT` environment variable; `0` turns it off) and `requests` is how many queries are in it now; unlike `solr.queries`' counts, which run from Solr's start, these cover only the window. Its latencies are grouped by which span of time they measure, and each span is nested in the next. `lookup_ms` times all of a lookup inside NameRes (the Solr round trip plus building the results) with its `mean`, `min`, `max` and `p50`/`p95`/`p99`. `solr_round_trip_ms` is the part of that spent on the Solr request as NameRes sees it (setting up the connection, Solr's handling, the transfer and decoding the JSON), with the same six values. `solr.queries.handler_ms` is only the time inside Solr's handler. The gaps between the three locate time spent in NameRes, between NameRes and Solr, or in Solr; comparing tails across them is a pointer rather than proof, since `solr.queries` covers different traffic over a different period and `recent_queries` includes failed queries (see [Performance.md](Performance.md)). These are computed from local data (no Solr round-trip), so they are present on the default `/status` path; to keep that path cheap, the latencies are recomputed at most every 10 seconds (all of a series' figures together, so they agree with each other), while the counts are always current. A failed query counts in `max`, so a single timeout holds it near `SOLR_TIMEOUT_SECONDS` until it leaves the window. The latencies are `null` until a query has been handled, and the percentiles until two have. `errors`, `timeouts` and `cancelled` count the queries in the window that failed: `timeouts` did not get an answer within `SOLR_TIMEOUT_SECONDS`, `cancelled` were abandoned while waiting on Solr (for instance by a server shutdown), and `errors` are the rest (Solr returned an error or could not be reached, or NameRes could not build results from its answer), so their sum is every failure. Failed queries are included in the timings above, since their callers waited for them too. (`release-v1.5.2-with-metrics` deployments reported `recent_queries` under older, flat names: `mean_time_ms`, `mean_solr_time_ms`, `count`.)
+
+`solr` collects what NameRes reads from its Solr core: the name of the `core` it is reporting on, the core's
+`startTime`, and the index's `numDocs`, `maxDoc`, `deletedDocs`, `version`, `segmentCount`, `lastModified` and `size`.
+`solr.version` is Solr's index version counter, not a release of anything. The key is named after `backend`'s value.
+With `?full=true` it also holds Solr's health metrics (`queries`, `cache`, `jvm` and `os`; see below). When the expected
+core is not found (`"status": "error"`), `solr` is absent, or with `?full=true` holds only `jvm` and `os`. **In NameRes v1.7.1 and earlier these fields were at the top level**, and `solr.version` was the top-level `version`.
+
+`solr.queries`, `solr.cache`, `solr.jvm` and `solr.os` are Solr's own health metrics, read from its `/admin/metrics` API. They are only included when the `?full=true` query parameter is passed, as fetching them requires an additional round-trip to Solr; the default `/status` stays cheap for Kubernetes liveness probes. With `?full=true`, a failed fetch is reported as `solr.metrics_error` in their place, so it cannot be mistaken for a request that did not ask for metrics. If Solr answers but has no metrics for the core (`queries` and `cache` belong to a core), `metrics_error` says so alongside `jvm` and `os`. Any individual field is `null` when the underlying Solr metric is unavailable (e.g. a cache that isn't configured). The blocks are:
+
+- `queries` — Solr's figures for every `/select` the core has served, including `/synonyms` and `/reverse_lookup` (where `recent_queries` covers `/lookup` alone): the request count and error/timeout counts since Solr started, and `handler_ms`: the time inside Solr's `/select` handler (`mean`, `min`, `max`, `p50`/`p95`/`p99`), which Solr samples over roughly the last few minutes, so `max` is the slowest request still in that sample rather than since Solr started. A widening gap between `p50` and `p99` indicates Solr-side strain. Solr's `timeouts` counts only requests Solr itself cut short and answered with partial results (as `timeAllowed` would, which NameRes does not set), so it normally stays at 0; requests NameRes gave up on are `recent_queries.timeouts`.
+- `cache` — `filterCache` and `queryResultCache`, each with `hitratio`, `lookups`, `hits`, `evictions`, and `size`. A low hit ratio with high evictions means the cache is undersized for the query mix; NameRes filters heavily (`fq`), so `filterCache` usually matters most.
+- `jvm` — Solr's heap (`heap_used_mb`/`heap_max_mb`/`heap_used_pct`), process `cpu_load`, and cumulative GC pauses (`gc_count`/`gc_time_ms`; concurrent GC work, which doesn't pause Solr, is left out). Rising `gc_time_ms` relative to uptime signals heap pressure.
+- `os` — what the JVM's operating system reports, for **sizing the pod's CPU/memory requests**: `available_processors`, `system_load_average`, `system_cpu_load`, and `total_physical_mem_mb`. In a container, `available_processors` and `total_physical_mem_mb` are the container's limits rather than the machine's; `system_load_average` is machine-wide. Because Solr mmaps its index, physical memory beyond the heap becomes OS page cache for the (read-only) index — so the pod generally wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. (Free physical memory is intentionally not reported: Solr's JVM exposes only Linux `MemFree`, which excludes page cache and so reads near-zero on a healthy node — misleading rather than useful. For a true page-cache view of the Solr host, run a node-level exporter such as node_exporter/Prometheus there.)
+
+For how to read these metrics together — including a decision tree for CPU vs. memory vs. load — see [Performance.md](Performance.md).
