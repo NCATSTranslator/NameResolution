@@ -32,9 +32,10 @@ Three latencies nest inside one another, and the fields are named for which one 
 | Solr handler | `solr.queries.handler_ms` (with `?full=true`) | Only the time inside Solr's `/select` handler, as Solr's own timer measures it. |
 
 So `lookup_ms` − `solr_round_trip_ms` is NameRes's result processing, and `solr_round_trip_ms` −
-`handler_ms` is connection, transfer and JSON overhead. That second gap is large: `lookup()`
-currently opens a new HTTP client and connection per query, which on a local Solr made a 1 ms
-query take about 8 ms.
+`handler_ms` is connection, transfer and JSON overhead. NameRes shares one HTTP client with kept-
+alive connections across its Solr requests, so that second gap should be small; a large one points
+at the network between the API and Solr, or at large responses. (When `lookup()` opened a new
+client and connection per query, that overhead took a 1 ms query on a local Solr to about 8 ms.)
 
 | Field | What it means |
 |---|---|
@@ -207,7 +208,7 @@ Solr seems slow or the service is unresponsive
 │    ├─ solr_round_trip_ms is high but handler_ms is small
 │    │    → the time is between NameRes and Solr: connection setup, network, transfer,
 │    │      JSON decoding. Check: network between the API and Solr pods; large responses
-│    │      (`limit`, highlighting). lookup() opens a new connection per query today.
+│    │      (`limit`, highlighting).
 │    │
 │    └─ handler_ms is most of solr_round_trip_ms → problem is INSIDE Solr → continue
 │

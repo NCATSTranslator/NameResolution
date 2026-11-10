@@ -527,3 +527,39 @@ def test_diagnostic_setting_reads_valid_values(monkeypatch):
     assert diagnostic_setting("NAMERES_TEST_SETTING", 7, int) == 0
     monkeypatch.setenv("NAMERES_TEST_SETTING", "250.5")
     assert math.isclose(diagnostic_setting("NAMERES_TEST_SETTING", 7.0, float), 250.5)
+
+
+def test_solr_client_is_shared_within_an_event_loop():
+    """Solr requests reuse one client, and so its kept-alive connections, rather than
+    paying for a new client and connection per query. A new loop gets its own client,
+    since connections belong to the loop that opened them."""
+    import api.server
+
+    async def two():
+        return api.server.solr_client(), api.server.solr_client()
+
+    first, again = asyncio.run(two())
+    assert first is again
+    other, _ = asyncio.run(two())
+    assert other is not first
+
+
+def test_shared_solr_client_is_reused_and_closed_on_shutdown(monkeypatch):
+    import api.server
+    handed_out = []
+    real_solr_client = api.server.solr_client
+
+    def spy():
+        handed_out.append(real_solr_client())
+        return handed_out[-1]
+    monkeypatch.setattr(api.server, "solr_client", spy)
+
+    # As a context manager, TestClient runs the app's lifespan and serves every request
+    # from one event loop, as uvicorn does.
+    with TestClient(app) as client:
+        client.get("/lookup", params={'string': 'alzheimer'})
+        client.get("/lookup", params={'string': 'diabetes'})
+        client.get("/status")
+        assert not handed_out[0].is_closed
+    assert len(handed_out) == 3 and all(c is handed_out[0] for c in handed_out)
+    assert handed_out[0].is_closed

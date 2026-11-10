@@ -9,10 +9,12 @@ import json
 import logging
 import statistics
 import warnings
+import weakref
 import time
 import os
 import re
 from collections import Counter, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Union, Annotated, Optional
@@ -76,7 +78,50 @@ class Config:
 
 config = Config()
 
-app = FastAPI(**get_app_info())
+
+# One httpx client per event loop, shared by every Solr request, so that requests reuse
+# kept-alive connections. A new client per query (as lookup() used to make) builds an SSL
+# context and opens a TCP connection each time: on a local Solr that took a 1 ms query to about
+# 8 ms, most of what /status reported as solr_round_trip_ms.
+#
+# Keyed by loop because an httpx client's connections belong to the loop that opened them.
+# Uvicorn serves everything from one loop, so in production this is a single client; the
+# key matters for TestClient and asyncio.run(), which start a fresh loop per call, and
+# would otherwise be handed connections from a loop that has gone. Weak keys let a dead
+# loop's client go with it.
+_solr_clients: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient]" = \
+    weakref.WeakKeyDictionary()
+
+
+def solr_client() -> httpx.AsyncClient:
+    """ The shared Solr client for the running event loop, created on first use. """
+    loop = asyncio.get_running_loop()
+    client = _solr_clients.get(loop)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            timeout=config.solr_timeout,
+            # No cap on connections, as when each query had its own client: the in-flight
+            # bound is SOLR_MAX_CONCURRENT_LOOKUPS per /bulk-lookup request, and a pool cap
+            # below that would make queries wait for a connection -- inside
+            # SOLR_TIMEOUT_SECONDS, so a busy pool would show up as Solr timeouts. Keep up
+            # to that many idle connections alive for reuse.
+            limits=httpx.Limits(max_connections=None,
+                                max_keepalive_connections=config.solr_max_concurrent_lookups),
+        )
+        _solr_clients[loop] = client
+    return client
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """ Close the shared Solr client when the server shuts down. """
+    yield
+    client = _solr_clients.pop(asyncio.get_running_loop(), None)
+    if client is not None:
+        await client.aclose()
+
+
+app = FastAPI(**get_app_info(), lifespan=lifespan)
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOGLEVEL", logging.INFO))
 
@@ -297,21 +342,21 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
     """
     metrics_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/metrics"
     try:
-        async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
-            # A single call with group=core&group=jvm retrieves both in one round-trip.
-            metrics_resp = await client.get(metrics_url, params=[
-                ('group', 'core'),
-                ('group', 'jvm'),
-                ('prefix', 'QUERY./select'),
-                # Solr 9 registers the searcher caches as CACHE.searcher.*, not
-                # CACHE.core.* -- a wrong name here yields nulls, not an error.
-                ('prefix', 'CACHE.searcher.filterCache'),
-                ('prefix', 'CACHE.searcher.queryResultCache'),
-                ('prefix', 'memory.heap'),
-                ('prefix', 'gc.'),
-                ('prefix', 'os.'),
-                ('wt', 'json'),
-            ])
+        client = solr_client()
+        # A single call with group=core&group=jvm retrieves both in one round-trip.
+        metrics_resp = await client.get(metrics_url, params=[
+            ('group', 'core'),
+            ('group', 'jvm'),
+            ('prefix', 'QUERY./select'),
+            # Solr 9 registers the searcher caches as CACHE.searcher.*, not
+            # CACHE.core.* -- a wrong name here yields nulls, not an error.
+            ('prefix', 'CACHE.searcher.filterCache'),
+            ('prefix', 'CACHE.searcher.queryResultCache'),
+            ('prefix', 'memory.heap'),
+            ('prefix', 'gc.'),
+            ('prefix', 'os.'),
+            ('wt', 'json'),
+        ])
         if metrics_resp.status_code >= 300:
             logger.warning("Solr error on accessing /solr/admin/metrics: HTTP %d: %s",
                            metrics_resp.status_code, metrics_resp.text)
@@ -435,13 +480,13 @@ async def status_get(
 async def status(full: bool = False) -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/cores"
-    async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
-        response = await client.get(query_url, params={
-            'action': 'STATUS'
-        })
-        if response.status_code >= 300:
-            logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
-            response.raise_for_status()
+    client = solr_client()
+    response = await client.get(query_url, params={
+        'action': 'STATUS'
+    })
+    if response.status_code >= 300:
+        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
+        response.raise_for_status()
 
     result = response.json()
 
@@ -659,8 +704,8 @@ async def name_lookup(curies) -> Dict[str, Dict]:
         "query": curie_filter,
         "limit": 1000000,
     }
-    async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
-        response = await client.post(query, json=params)
+    client = solr_client()
+    response = await client.post(query, json=params)
     response.raise_for_status()
     response_json = response.json()
     output = {
@@ -1088,8 +1133,8 @@ async def lookup(string: str,
     time_solr_start = time.time_ns()
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
     try:
-        async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
-            response = await client.post(query_url, json=params)
+        client = solr_client()
+        response = await client.post(query_url, json=params)
         if response.status_code >= 300:
             logger.error("Solr REST error: %s", response.text)
             response.raise_for_status()
