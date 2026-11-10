@@ -5,10 +5,11 @@ observability built into NameRes. It covers what the metrics in `/status` mean, 
 the log messages, and a decision tree for identifying CPU pressure, memory pressure, high
 load, and other causes.
 
-All the Solr-side metrics below live under `solr_metrics`, which is only fetched when you
-call **`/status?full=true`** (it adds a round-trip to Solr, so the default `/status` stays
-cheap for Kubernetes liveness probes). If `solr_metrics` comes back as `{"error": ...}`, the
-fetch from Solr's `/admin/metrics` failed, and the NameRes log has the details. See
+All the Solr-side metrics below live under `solr` -- `solr.queries`, `solr.cache`, `solr.jvm`
+and `solr.os` -- and are only fetched when you call **`/status?full=true`** (it adds a
+round-trip to Solr, so the default `/status` stays cheap for Kubernetes liveness probes). If
+`solr.metrics_error` appears instead, the fetch from Solr's `/admin/metrics` failed, and the
+NameRes log has the details. See
 [API.md](API.md#status) for the full response.
 
 ---
@@ -24,19 +25,23 @@ present (no `?full=true` needed).
 |---|---|
 | `mean_time_ms` | Average round-trip time (Python → Solr → Python) over the last `count` `/lookup` queries. Rising mean = sustained slowdown. |
 | `mean_solr_time_ms` | Of that, the average time spent waiting on Solr. If this is close to `mean_time_ms`, the bottleneck is inside Solr; if it is much smaller, the bottleneck is Python-side result processing. |
-| `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `query_handler` percentiles localizes a latency tail: if the end-to-end `p99_ms` is far above `query_handler.p99_ms`, the tail is in NameRes (result processing, GC in the Python process), not Solr. Computed locally, so they need no `?full=true` round-trip. |
+| `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `solr.queries` percentiles localizes a latency tail: if the end-to-end `p99_ms` is far above `solr.queries.p99_ms`, the tail is in NameRes (result processing, GC in the Python process), not Solr. Computed locally, so they need no `?full=true` round-trip. |
 | `count` / `max` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). |
-| `failed` / `timed_out` | How many queries in the window failed, and how many of those hit `SOLR_TIMEOUT_SECONDS`. Unlike `query_handler.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `p99_ms` too. |
+| `failed` / `timed_out` | How many queries in the window failed, and how many of those hit `SOLR_TIMEOUT_SECONDS`. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `p99_ms` too. |
 
-### Solr query handler (`solr_metrics.query_handler`)
+### Solr queries (`solr.queries`)
 
-Cumulative `/select` statistics straight from Solr.
+Solr's own figures for every `/select` the core has served -- `/synonyms` and `/reverse_lookup`
+as well as `/lookup`, where `recent_queries` times `/lookup` alone. `requests`, `errors` and
+`timeouts` count from Solr's start. `mean_ms` and the percentiles come from Solr's request timer,
+which by default samples with an exponentially decaying reservoir, so they describe roughly the
+last few minutes rather than Solr's lifetime.
 
 | Field | What it means |
 |---|---|
 | `requests` | Total `/select` requests handled since Solr started. Sample it twice to get a rate. |
 | `errors` / `timeouts` | Cumulative counts. Any non-zero `timeouts` means Solr is dropping queries under load. |
-| `mean_ms` | Mean Solr-side request time. |
+| `mean_ms` | Mean Solr-side request time, over the same recent sample as the percentiles. |
 | `p50_ms` / `p95_ms` / `p99_ms` | Solr-side latency percentiles. `p99_ms` spiking while `p50_ms` stays stable = occasional GC pauses or one-off expensive queries; all of them rising = sustained overload. Compare against `recent_queries` percentiles to tell Solr-side tails from NameRes-side ones. |
 
 ### Index health (`solr`)
@@ -45,9 +50,9 @@ Cumulative `/select` statistics straight from Solr.
 |---|---|
 | `segmentCount` | Number of Lucene segments. Above ~20 means Solr does more per-segment work per query. The index is read-only after loading, so an optimize is safe: `POST http://<solr-host>:8983/solr/name_lookup/update?optimize=true`. |
 | `numDocs` / `maxDoc` | `maxDoc - numDocs` = soft-deleted docs not yet merged. A high deleted count plus high `segmentCount` amplifies query cost. |
-| `size` | Index size on disk. Unexpectedly small may indicate an incomplete data load; it is also the target the Solr host's RAM should approach (see `host` below). |
+| `size` | Index size on disk. Unexpectedly small may indicate an incomplete data load; it is also the target the Solr host's RAM should approach (see `os` below). |
 
-### JVM (`solr_metrics.jvm`)
+### JVM (`solr.jvm`)
 
 | Field | What it means |
 |---|---|
@@ -56,17 +61,21 @@ Cumulative `/select` statistics straight from Solr.
 | `cpu_load` | Solr process CPU (0.0–1.0). **> 0.80 = CPU saturation.** |
 | `gc_count` / `gc_time_ms` | Cumulative garbage-collection pause count and total pause time across all collectors. Rising `gc_time_ms` relative to uptime = heap pressure (and a source of `p99_ms` spikes). |
 
-### Host resources (`solr_metrics.host`)
+### OS resources (`solr.os`)
 
-The machine Solr runs on — use these to **size the Solr pod's CPU/memory requests**.
+What the JVM's operating-system bean reports — use these to **size the Solr pod's CPU/memory
+requests**. In a container, `available_processors` and `total_physical_mem_mb` are the
+container's CPU and memory limits, not the machine's (a `solr:9.10` container started with
+`--cpus 2 --memory 1g` on a 12-CPU machine reports 2 and 1024). `system_load_average` is
+machine-wide even in a container.
 
 | Field | What it means |
 |---|---|
-| `available_processors` | CPUs visible to Solr. |
+| `available_processors` | CPUs available to Solr: the container's CPU limit, if it has one. |
 | `system_load_average` / `system_cpu_load` | Host-wide load and CPU (0.0–1.0). If `system_cpu_load` is higher than `jvm.cpu_load`, other processes are competing with Solr. |
-| `total_physical_mem_mb` | Host RAM. Because Solr mmaps its read-only index, RAM beyond the heap becomes OS page cache for the index, so the host wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. (Free physical memory is not reported: Solr's JVM exposes only Linux `MemFree`, which excludes page cache and reads near-zero on a healthy node. Nor is it read from `/proc/meminfo` by the NameRes API: that would describe the API pod's node, which is not necessarily Solr's. Page-cache stats need a node-level exporter on the Solr host — see #267.) |
+| `total_physical_mem_mb` | RAM available to Solr: the container's memory limit, if it has one. Because Solr mmaps its read-only index, RAM beyond the heap becomes OS page cache for the index, so the host wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. (Free physical memory is not reported: Solr's JVM exposes only Linux `MemFree`, which excludes page cache and reads near-zero on a healthy node. Nor is it read from `/proc/meminfo` by the NameRes API: that would describe the API pod's node, which is not necessarily Solr's. Page-cache stats need a node-level exporter on the Solr host — see #267.) |
 
-### Caches (`solr_metrics.cache`)
+### Caches (`solr.cache`)
 
 Reports both `filterCache` and `queryResultCache`. NameRes filters heavily by prefix, type, and
 taxon (Solr `fq`), so `filterCache` usually matters most.
@@ -145,7 +154,7 @@ which is what you correlate against a latency tail:
 Note this is `-Xlog:gc`, not `-Xlog:gc*` — the bare form is roughly an order of magnitude less
 chatty. Switch to `gc*` temporarily if you are debugging GC itself.
 
-If GC logs are unavailable for any reason, `solr_metrics.jvm.gc_count` / `gc_time_ms` in
+If GC logs are unavailable for any reason, `solr.jvm.gc_count` / `gc_time_ms` in
 `/status?full=true` give you the same signal in aggregate — sample them twice to get a rate.
 
 ---
@@ -155,9 +164,9 @@ If GC logs are unavailable for any reason, `solr_metrics.jvm.gc_count` / `gc_tim
 ```
 Solr seems slow or the service is unresponsive
 │
-├─ Step 1: Check solr_metrics.host and query_handler in /status?full=true
+├─ Step 1: Check solr.os and solr.queries in /status?full=true
 │    │
-│    ├─ system_load_average / system_cpu_load is high AND query_handler.requests is
+│    ├─ system_load_average / system_cpu_load is high AND solr.queries.requests is
 │    │  climbing fast (sample twice) → the host is under LOAD, not internally broken.
 │    │       Check: are callers batching? (/synonyms, /bulk-lookup instead of many /lookup)
 │    │       Check: is a client in a retry loop? (repeated identical queries in the logs)
@@ -174,17 +183,17 @@ Solr seems slow or the service is unresponsive
 │    │
 │    └─ mean_solr_time_ms is most of mean_time_ms → problem is INSIDE Solr → continue
 │
-├─ Step 3: Check solr_metrics.jvm.heap_used_pct
+├─ Step 3: Check solr.jvm.heap_used_pct
 │    │
 │    ├─ > 80 → MEMORY PRESSURE
-│    │    ├─ solr_metrics.cache.filterCache.evictions rising → cache too small for the
+│    │    ├─ solr.cache.filterCache.evictions rising → cache too small for the
 │    │    │    working set. Fix: raise <maxSize> for filterCache in solrconfig.xml.
 │    │    └─ Evictions low but heap still high → data/fieldCache is large.
 │    │         Fix: raise -Xmx (SOLR_JAVA_MEM) or add RAM to the host.
 │    │
 │    └─ < 50 → not a memory issue → continue
 │
-├─ Step 4: Check solr_metrics.jvm.cpu_load (and host.system_cpu_load)
+├─ Step 4: Check solr.jvm.cpu_load (and solr.os.system_cpu_load)
 │    │
 │    ├─ > 0.80 → CPU SATURATION
 │    │    ├─ solr.segmentCount > 20 → optimize to merge segments
@@ -197,13 +206,13 @@ Solr seems slow or the service is unresponsive
 │
 └─ Step 5: Compare the two p99s to locate the tail, then check jvm.gc_time_ms
      │
-     ├─ query_handler.p99_ms >> p50_ms (e.g. p50=50ms, p99=5000ms) with rising gc_time_ms
+     ├─ solr.queries.p99_ms >> p50_ms (e.g. p50=50ms, p99=5000ms) with rising gc_time_ms
      │    → Solr-side GC-pause signature. Confirm in the Solr GC log (see "Solr's own
      │      logs" above for where it goes; look for "Pause Young"/"Pause Full" durations
      │      lining up with the slow window). Fix: tune GC_TUNE in the chart's values
      │      (-XX:+UseG1GC -XX:MaxGCPauseMillis=...).
      │
-     ├─ recent_queries.p99_ms >> query_handler.p99_ms → the tail is in NameRes, not Solr
+     ├─ recent_queries.p99_ms >> solr.queries.p99_ms → the tail is in NameRes, not Solr
      │    (large result sets, Python-side GC). Check `limit`; scale the API horizontally.
      │
      └─ Both p50 and p99 high → sustained overload at all percentiles
