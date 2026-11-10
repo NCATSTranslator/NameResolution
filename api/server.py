@@ -897,7 +897,9 @@ async def lookup(string: str,
         strings, enough to swamp the window, and its strings compete with each other for Solr
         while a /lookup caller's doesn't. For the same reason a slow string is logged at INFO
         rather than as a SLOW QUERY warning, so that one bulk request against a struggling
-        Solr can't bury the log in them. Failures are still logged at WARNING.
+        Solr can't bury the log in them. Its failures are logged at INFO too, and
+        bulk_lookup() logs one FAILED BULK QUERY warning for the request: a bulk request
+        against an unreachable Solr would otherwise log one warning per string.
 
     :param autocomplete: Should we do the lookup in autocomplete mode (in which we expect the final word to be
         incomplete) or not (in which the entire phrase is expected to be complete, i.e. as an entity linker)?
@@ -1238,8 +1240,10 @@ async def lookup(string: str,
         if not bulk:
             solr_end = time_solr_end if time_solr_end is not None else time_failed
             recent_lookups.record(time_failed - time_start, solr_end - time_solr_start, outcome)
-        logger.warning(f"FAILED QUERY ({outcome}: {type(e).__name__}): {log_msg_prefix}: "
-                       f"failed after {time_taken_ms:.2f}ms")
+        # A bulk string's failure is at INFO: bulk_lookup() warns once for the whole request.
+        (logger.info if bulk else logger.warning)(
+            f"FAILED QUERY ({outcome}: {type(e).__name__}): {log_msg_prefix}: "
+            f"failed after {time_taken_ms:.2f}ms")
         raise
 
     time_end = time.perf_counter_ns()
@@ -1364,7 +1368,26 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
             )
         return string, results
 
-    pairs = await asyncio.gather(*[do_lookup(s) for s in query.strings])
+    tasks = [asyncio.create_task(do_lookup(s)) for s in query.strings]
+    try:
+        pairs = await asyncio.gather(*tasks)
+    except BaseException as e:
+        # One string has failed, so the request has (it becomes a 500). gather() doesn't
+        # cancel the others when one fails, so without this every remaining string would
+        # still be sent to a Solr that is probably down or overloaded, each failing in turn.
+        # Cancel them, and wait for them so that none outlives the request.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        failed = sum(1 for task in tasks if not task.cancelled() and task.exception() is not None)
+        time_failed = time.perf_counter_ns()
+        # The one warning for the request: its strings' own failures are logged at INFO
+        # (see lookup()'s `bulk`), so that a bulk request against an unreachable Solr logs
+        # one warning rather than one per string.
+        logger.warning(f"FAILED BULK QUERY ({type(e).__name__}): Bulk lookup query for "
+                       f"{len(query.strings)} strings ({query}): {failed} failed, and those not yet "
+                       f"done were cancelled, after {(time_failed - time_start)/1_000_000:.2f}ms")
+        raise
     result = dict(pairs)
 
     time_end = time.perf_counter_ns()

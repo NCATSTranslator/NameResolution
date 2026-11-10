@@ -133,10 +133,19 @@ anything parsing these lines should accept both.
 
 A lookup that fails instead logs at WARNING with the outcome (`timeout`, `cancelled` or `error`)
 and the exception type, before the exception is re-raised (and, unless it was cancelled, becomes
-an HTTP 500). Bulk strings that fail are logged this way too:
+an HTTP 500):
 
 ```
 WARNING: FAILED QUERY (timeout: ReadTimeout): Lookup query to Solr for "..." ...: failed after 60012.40ms
+```
+
+The strings of a `/bulk-lookup` log the same line at INFO. The first string to fail fails the
+whole request, so NameRes cancels the strings still running or waiting (they log as `cancelled`)
+rather than send each of them to a Solr that is likely down, and logs a single warning for the
+request:
+
+```
+WARNING: FAILED BULK QUERY (ConnectError): Bulk lookup query for 5000 strings (...): 1 failed, and those not yet done were cancelled, after 12.30ms
 ```
 
 Key interpretation:

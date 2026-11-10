@@ -485,6 +485,35 @@ def test_bulk_lookup_is_not_in_recent_queries(monkeypatch, caplog):
     assert not any("SLOW QUERY" in r.getMessage() for r in caplog.records)
 
 
+def test_failed_bulk_lookup_warns_once_and_cancels_the_rest(monkeypatch, caplog):
+    """A bulk request against a failing Solr logs one warning, not one per string, and
+    stops sending its remaining strings to Solr once the request has failed."""
+    import api.server
+    calls = []
+
+    async def first_fails_then_hangs(self, url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            raise httpx.ConnectError("connection refused")
+        await asyncio.Event().wait()   # Never answers: only cancellation ends it.
+    monkeypatch.setattr(httpx.AsyncClient, "post", first_fails_then_hangs)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    strings = [f"string {i}" for i in range(3 * api.server.config.solr_max_concurrent_lookups)]
+    with caplog.at_level(logging.INFO, logger="api.server"):
+        assert client.post("/bulk-lookup", json={'strings': strings}).status_code == 500
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    assert warnings[0].startswith(f"FAILED BULK QUERY (ConnectError): Bulk lookup query for {len(strings)} strings")
+    assert "1 failed" in warnings[0]
+    # The strings that were waiting on Solr when the request failed were cancelled, and
+    # those still waiting for a slot never reached it.
+    assert any("FAILED QUERY (cancelled" in r.getMessage() and r.levelno == logging.INFO
+               for r in caplog.records)
+    assert len(calls) <= api.server.config.solr_max_concurrent_lookups + 1
+
+
 def test_cancelled_lookup_is_recorded(monkeypatch, caplog):
     """A lookup cancelled while it waits on Solr is timed and counted as `cancelled`.
     CancelledError is a BaseException, which an `except Exception` lets past."""
