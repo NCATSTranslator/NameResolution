@@ -347,8 +347,25 @@ POST /synonyms with body:
 Returns the status of the service. Most importantly, this returns the [Babel](https://github.com/NCATSTranslator/Babel)
 version and changelog URL, which can be used to determine which version of Babel is currently loaded in this service.
 It also includes the NameRes version (also visible in the OpenAPI documentation)
-and the Biolink Model version used to build the Solr database, as well as bunch of information from the underlying
-Solr database. The `config` object reports publicly-relevant configuration for this instance; currently just
+and the Biolink Model version used to build the Solr database, as well as information read from the underlying
+Solr database, which is grouped under `solr`.
+
+`backend` names the database answering the query. It is always `"solr"` from this implementation; the
+Elasticsearch-backed NameRes at [biothings/NameResolutionAPI](https://github.com/biothings/NameResolutionAPI) reports
+`"elasticsearch"`. Downstream tools should read this field rather than the human-readable `message` to tell the two
+apart.
+
+`version` is the version of this API, identical to `info.version` in the service's `/openapi.json` document and
+reported under the same key by [NodeNorm's `/status`](https://github.com/NCATSTranslator/NodeNormalization).
+`nameres_version` is the same value with a leading `v`, and is retained for consumers that already read it.
+
+`solr` collects what NameRes reads from its Solr core: the name of the `core` it is reporting on, the core's
+`startTime`, and the index's `numDocs`, `maxDoc`, `deletedDocs`, `version`, `segmentCount`, `lastModified` and `size`.
+`solr.version` is Solr's index version counter, not a release of anything. The key is named after `backend`'s value.
+It is absent when the expected core is not found (`"status": "error"`). **Before NameRes v1.8.0 these fields were at
+the top level**, and `solr.version` was the top-level `version`.
+
+The `config` object reports publicly-relevant configuration for this instance; currently just
 `minimum_query_length`, the shortest query (in characters, after whitespace is stripped) that `/lookup` and
 `/bulk-lookup` will search for in the default tokenized search. It defaults to 2 and can be set per deployment with the
 `NAMERES_MINIMUM_QUERY_LENGTH` environment variable. It does not constrain [exact matching](#exact-matching), which
@@ -358,6 +375,8 @@ accepts any non-empty string.
 {
   "status": "ok",
   "message": "Reporting results from primary core.",
+  "backend": "solr",
+  "version": "1.7.0",
   "babel_version": "2025sep1",
   "babel_version_url": "https://github.com/ncatstranslator/Babel/blob/master/releases/2025sep1.md",
   "biolink_model": {
@@ -365,17 +384,20 @@ accepts any non-empty string.
     "url": "https://github.com/biolink/biolink-model/tree/v4.2.6-rc5",
     "download_url": "https://raw.githubusercontent.com/biolink/biolink-model/v4.2.6-rc5/biolink-model.yaml"
   },
-  "nameres_version": "v1.5.1",
+  "nameres_version": "v1.7.0",
   "config": {
     "minimum_query_length": 2
   },
-  "startTime": "2025-12-19T11:53:09.638Z",
-  "numDocs": 425583391,
-  "maxDoc": 425586610,
-  "deletedDocs": 3219,
-  "version": 34838,
-  "segmentCount": 57,
-  "lastModified": "2025-09-24T19:09:56.524Z",
-  "size": "142.17 GB"
+  "solr": {
+    "core": "name_lookup",
+    "startTime": "2025-12-19T11:53:09.638Z",
+    "numDocs": 425583391,
+    "maxDoc": 425586610,
+    "deletedDocs": 3219,
+    "version": 34838,
+    "segmentCount": 57,
+    "lastModified": "2025-09-24T19:09:56.524Z",
+    "size": "142.17 GB"
+  }
 }
 ```
