@@ -123,32 +123,29 @@ Solr's application log (`solr.log`) is written to both a file and stdout, so in 
 collected by the cluster log stack (Grafana) along with everything else the pod prints.
 
 Solr's **GC log** is separate: it is a JVM-level `-Xlog` sink that bypasses log4j2 entirely.
-Solr's default is to write it to `$SOLR_LOGS_DIR/solr_gc.log` (`/var/solr/logs`), which in our
-Helm chart is **not** on the Solr PVC — only `/var/solr/data` is mounted — so by default the GC
-log is ephemeral and is lost on exactly the pod restart that makes you want to read it. Until
-then you can read it in place:
+The `name-lookup` chart routes it to stdout through the `solr.gc_log` value (default
+`-Xlog:gc:stdout:time,uptime`, passed to the container as `GC_LOG_OPTS`), so GC lines land in
+Grafana next to `solr.log` and survive pod restarts. This arrived with
+helxplatform/translator-devops#1044; on ITRB CI it was live by November 2026. To check another
+deployment, run `kubectl exec <solr-pod> -- printenv GC_LOG_OPTS`, or search its Solr pod's logs
+for `Pause Young`.
+
+Each collection prints one line, with no log level or logger name: the wall-clock time, the JVM
+uptime, then the collection number, pause type, heap before -> after (heap size) and the pause
+duration, which is what you correlate against a latency tail. In Grafana the line is the `log`
+field of the container's record. From ITRB CI's 16G heap:
+
+```
+[2026-11-05T19:00:36.672+0000][1.368s] GC(0) Pause Young (Concurrent Start) (Metadata GC Threshold) 382M->50M(16384M) 6.750ms
+```
+
+Clearing `solr.gc_log` (setting it to `""`) falls back to Solr's default: a rotating
+`$SOLR_LOGS_DIR/solr_gc.log` (`/var/solr/logs`, capped at 9 × 20 MB). That directory is **not**
+on the Solr PVC -- only `/var/solr/data` is mounted -- so the file is lost on exactly the pod
+restart that makes you want to read it. Until then you can read it in place:
 
 ```
 kubectl exec <solr-pod> -- tail -n 200 /var/solr/logs/solr_gc.log
-```
-
-To have it survive restarts, route GC logging to stdout by setting `GC_LOG_OPTS` on the Solr
-container:
-
-```
--Xlog:gc:stdout:time,uptime
-```
-
-GC lines then land in the cluster log collector (Grafana) next to `solr.log`. The `name-lookup`
-chart does not set this yet; helxplatform/translator-devops#1044 adds it as the `solr.gc_log`
-value, and once that is deployed clearing `solr.gc_log` falls back to Solr's default file
-(rotating `solr_gc.log`, capped at 9 × 20 MB).
-
-Either way, each collection prints one line with heap before/after and the pause duration,
-which is what you correlate against a latency tail:
-
-```
-[2026-07-24T03:07:11.367+0000][0.930s] GC(0) Pause Young (Normal) (G1 Evacuation Pause) 29M->4M(512M) 2.133ms
 ```
 
 Note this is `-Xlog:gc`, not `-Xlog:gc*` — the bare form is roughly an order of magnitude less
