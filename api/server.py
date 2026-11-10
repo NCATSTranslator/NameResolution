@@ -302,18 +302,27 @@ async def status(full: bool = False) -> Dict:
         p50 = p95 = p99 = None
 
     outcomes = Counter(recent_query_outcomes)
+    # Named to match solr.queries wherever the two measure the same kind of thing, so the
+    # NameRes-side and Solr-side figures can be read side by side.
     recent_queries = {
-        'max': RECENT_TIMES_COUNT,
-        'count': len(recent_query_times),
-        'mean_time_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
-        'mean_solr_time_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
+        # The window's capacity (RECENT_TIMES_COUNT), not a latency.
+        'window_size': RECENT_TIMES_COUNT,
+        'requests': len(recent_query_times),
+        'mean_ms': sum(recent_query_times) / len(recent_query_times) if recent_query_times else None,
+        # The part of the above spent waiting for Solr, as the lookup log line's "waiting
+        # for Solr" figure. No solr.queries counterpart: Solr can't see the round trip.
+        'mean_solr_wait_ms': sum(recent_solr_times) / len(recent_solr_times) if recent_solr_times else None,
         'p50_ms': p50,
         'p95_ms': p95,
         'p99_ms': p99,
-        # Lookups in the window that failed, and how many of those hit SOLR_TIMEOUT_SECONDS.
-        # Their times are in the figures above: a timed-out lookup kept its caller waiting too.
-        'failed': outcomes['error'] + outcomes['timeout'],
-        'timed_out': outcomes['timeout'],
+        # Lookups in the window that failed, split by how: `timeouts` hit
+        # SOLR_TIMEOUT_SECONDS, `errors` are everything else (Solr returned an error, or
+        # couldn't be reached). Disjoint, so errors + timeouts is every failure. Their
+        # times are in the figures above: a timed-out lookup kept its caller waiting too.
+        # Not the same as solr.queries.timeouts, which counts only requests Solr itself
+        # cut short.
+        'errors': outcomes['error'],
+        'timeouts': outcomes['timeout'],
     }
 
     # We should have a status for our core. Standalone Solr calls it $SOLR_CORE

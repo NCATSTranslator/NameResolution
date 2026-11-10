@@ -23,11 +23,11 @@ present (no `?full=true` needed).
 
 | Field | What it means |
 |---|---|
-| `mean_time_ms` | Average round-trip time (Python → Solr → Python) over the last `count` `/lookup` queries. Rising mean = sustained slowdown. |
-| `mean_solr_time_ms` | Of that, the average time spent waiting on Solr. If this is close to `mean_time_ms`, the bottleneck is inside Solr; if it is much smaller, the bottleneck is Python-side result processing. |
+| `mean_ms` | Average round-trip time (Python → Solr → Python) over the last `requests` `/lookup` queries. Rising mean = sustained slowdown. |
+| `mean_solr_wait_ms` | Of that, the average time spent waiting on Solr. If this is close to `mean_ms`, the bottleneck is inside Solr; if it is much smaller, the bottleneck is Python-side result processing. |
 | `p50_ms` / `p95_ms` / `p99_ms` | **End-to-end** latency percentiles as the caller experiences them, over the window. Because these include NameRes processing, comparing them against Solr's own `solr.queries` percentiles localizes a latency tail: if the end-to-end `p99_ms` is far above `solr.queries.p99_ms`, the tail is in NameRes (result processing, GC in the Python process), not Solr. Computed locally, so they need no `?full=true` round-trip. |
-| `count` / `max` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). |
-| `failed` / `timed_out` | How many queries in the window failed, and how many of those hit `SOLR_TIMEOUT_SECONDS`. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `p99_ms` too. |
+| `requests` / `window_size` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). |
+| `errors` / `timeouts` | Queries in the window that failed: `timeouts` hit `SOLR_TIMEOUT_SECONDS`, `errors` are the rest (Solr returned an error or couldn't be reached). The two are disjoint, so their sum is every failure. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `p99_ms` too. |
 
 ### Solr queries (`solr.queries`)
 
@@ -40,7 +40,7 @@ last few minutes rather than Solr's lifetime.
 | Field | What it means |
 |---|---|
 | `requests` | Total `/select` requests handled since Solr started. Sample it twice to get a rate. |
-| `errors` / `timeouts` | Cumulative counts. Any non-zero `timeouts` means Solr is dropping queries under load. |
+| `errors` / `timeouts` | Cumulative counts. `timeouts` counts only requests Solr itself cut short and answered with partial results (as `timeAllowed` would; NameRes does not set it), so it normally stays at 0. Requests NameRes gave up waiting for are `recent_queries.timeouts`. |
 | `mean_ms` | Mean Solr-side request time, over the same recent sample as the percentiles. |
 | `p50_ms` / `p95_ms` / `p99_ms` | Solr-side latency percentiles. `p99_ms` spiking while `p50_ms` stays stable = occasional GC pauses or one-off expensive queries; all of them rising = sustained overload. Compare against `recent_queries` percentiles to tell Solr-side tails from NameRes-side ones. |
 
@@ -171,14 +171,14 @@ Solr seems slow or the service is unresponsive
 │    │
 │    └─ Load is normal → the problem is internal to Solr → continue
 │
-├─ Step 2: Compare recent_queries.mean_solr_time_ms vs mean_time_ms (and the log lines)
+├─ Step 2: Compare recent_queries.mean_solr_wait_ms vs mean_ms (and the log lines)
 │    │
-│    ├─ mean_solr_time_ms is small, mean_time_ms is high
+│    ├─ mean_solr_wait_ms is small, mean_ms is high
 │    │    → Python result-processing bottleneck
 │    │       Check: is `limit` very large? High result counts = expensive deserialization
 │    │       Check: NameRes process CPU (scale horizontally if saturated)
 │    │
-│    └─ mean_solr_time_ms is most of mean_time_ms → problem is INSIDE Solr → continue
+│    └─ mean_solr_wait_ms is most of mean_ms → problem is INSIDE Solr → continue
 │
 ├─ Step 3: Check solr.jvm.heap_used_pct
 │    │

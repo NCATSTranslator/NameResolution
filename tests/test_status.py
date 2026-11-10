@@ -65,12 +65,15 @@ def test_status_shape():
 
     # recent_queries should always be present; count/means/percentiles are None before any queries.
     rq = data['recent_queries']
-    assert 'count' in rq
-    assert 'mean_time_ms' in rq
-    assert 'mean_solr_time_ms' in rq
+    assert 'requests' in rq and 'window_size' in rq
+    assert 'mean_ms' in rq
+    assert 'mean_solr_wait_ms' in rq
     # End-to-end percentiles (local, no Solr round-trip) are on the default /status path.
     assert 'p50_ms' in rq and 'p95_ms' in rq and 'p99_ms' in rq
-    assert 'failed' in rq and 'timed_out' in rq
+    assert 'errors' in rq and 'timeouts' in rq
+    # The pre-rename names must not linger alongside the new ones.
+    for old in ('max', 'count', 'mean_time_ms', 'mean_solr_time_ms', 'failed', 'timed_out'):
+        assert old not in rq
 
     # Solr's health metrics are an extra round-trip, so they appear only with ?full=true.
     # They live under 'solr' -- never at the top level, as solr_metrics once did.
@@ -140,9 +143,9 @@ def test_status_recent_queries_populated():
     response = client.get("/status")
     data = response.json()
     rq = data['recent_queries']
-    assert rq['count'] >= 2
-    assert rq['mean_time_ms'] is not None
-    assert rq['mean_solr_time_ms'] is not None
+    assert rq['requests'] >= 2
+    assert rq['mean_ms'] is not None
+    assert rq['mean_solr_wait_ms'] is not None
     assert rq['p50_ms'] is not None and rq['p99_ms'] is not None
 
 
@@ -282,8 +285,9 @@ def test_failed_lookup_is_recorded(monkeypatch, caplog, failure, outcome):
         assert client.get("/lookup", params={'string': 'alzheimer'}).status_code == 500
     after = client.get("/status").json()['recent_queries']
 
-    assert after['failed'] == before['failed'] + 1
-    assert after['timed_out'] == before['timed_out'] + (1 if outcome == 'timeout' else 0)
-    assert after['count'] == min(before['count'] + 1, after['max'])
+    # errors and timeouts are disjoint: each failure counts in exactly one of them.
+    assert after['timeouts'] == before['timeouts'] + (1 if outcome == 'timeout' else 0)
+    assert after['errors'] == before['errors'] + (1 if outcome == 'error' else 0)
+    assert after['requests'] == min(before['requests'] + 1, after['window_size'])
     assert any(r.levelno == logging.WARNING and f"FAILED QUERY ({outcome}" in r.getMessage()
                for r in caplog.records)

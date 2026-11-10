@@ -383,15 +383,15 @@ accepts any non-empty string.
     "minimum_query_length": 2
   },
   "recent_queries": {
-    "max": 50000,
-    "count": 50000,
-    "mean_time_ms": 42.3,
-    "mean_solr_time_ms": 38.1,
+    "window_size": 50000,
+    "requests": 50000,
+    "mean_ms": 42.3,
+    "mean_solr_wait_ms": 38.1,
     "p50_ms": 21.0,
     "p95_ms": 140.5,
     "p99_ms": 410.2,
-    "failed": 0,
-    "timed_out": 0
+    "errors": 0,
+    "timeouts": 0
   },
   "solr": {
     "core": "name_lookup",
@@ -446,7 +446,7 @@ accepts any non-empty string.
 }
 ```
 
-`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `max` is the size of the tracking window (default 50000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `count` is how many queries have actually been recorded so far. `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. `p50_ms`/`p95_ms`/`p99_ms` are the end-to-end latency percentiles the caller actually sees; comparing them against `solr.queries`' Solr-side percentiles localizes a latency tail to Solr vs. NameRes. These are computed from local data (no Solr round-trip), so they are present on the default `/status` path. All of these are `null` until at least a couple of queries have been handled. `failed` is how many of the queries in the window failed (Solr returned an error, could not be reached, or did not answer within `SOLR_TIMEOUT_SECONDS`), and `timed_out` is how many of those were timeouts. Failed queries are included in the timings above, since their callers waited for them too.
+`recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance; its field names match `solr.queries` wherever the two measure the same kind of thing. `window_size` is the size of the tracking window (default 50000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `requests` is how many queries have actually been recorded so far. `mean_ms` is the mean end-to-end time; `mean_solr_wait_ms` is the part of it spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. `p50_ms`/`p95_ms`/`p99_ms` are the end-to-end latency percentiles the caller actually sees; comparing them against `solr.queries`' Solr-side percentiles localizes a latency tail to Solr vs. NameRes. These are computed from local data (no Solr round-trip), so they are present on the default `/status` path. All of these are `null` until at least a couple of queries have been handled. `errors` and `timeouts` count the queries in the window that failed: `timeouts` did not get an answer within `SOLR_TIMEOUT_SECONDS`, and `errors` are the rest (Solr returned an error or could not be reached), so their sum is every failure. Failed queries are included in the timings above, since their callers waited for them too. (`release-v1.5.2-with-metrics` deployments reported `recent_queries` under older names: `mean_time_ms`, `mean_solr_time_ms`, `count`.)
 
 `solr` collects what NameRes reads from its Solr core: the name of the `core` it is reporting on, the core's
 `startTime`, and the index's `numDocs`, `maxDoc`, `deletedDocs`, `version`, `segmentCount`, `lastModified` and `size`.
@@ -457,7 +457,7 @@ NameRes v1.8.0 these fields were at the top level**, and `solr.version` was the 
 
 `solr.queries`, `solr.cache`, `solr.jvm` and `solr.os` are Solr's own health metrics, read from its `/admin/metrics` API. They are only included when the `?full=true` query parameter is passed, as fetching them requires an additional round-trip to Solr; the default `/status` stays cheap for Kubernetes liveness probes. With `?full=true`, a failed fetch is reported as `solr.metrics_error` in their place, so it cannot be mistaken for a request that did not ask for metrics. Any individual field is `null` when the underlying Solr metric is unavailable (e.g. a cache that isn't configured). The blocks are:
 
-- `queries` — Solr's figures for every `/select` the core has served, including `/synonyms` and `/reverse_lookup` (where `recent_queries` covers `/lookup` alone): the request count and error/timeout counts since Solr started, and Solr-side `mean_ms` and latency percentiles (`p50_ms`/`p95_ms`/`p99_ms`), which Solr samples over roughly the last few minutes. A widening gap between `p50_ms` and `p99_ms`, or non-zero `timeouts`, indicates Solr-side strain.
+- `queries` — Solr's figures for every `/select` the core has served, including `/synonyms` and `/reverse_lookup` (where `recent_queries` covers `/lookup` alone): the request count and error/timeout counts since Solr started, and Solr-side `mean_ms` and latency percentiles (`p50_ms`/`p95_ms`/`p99_ms`), which Solr samples over roughly the last few minutes. A widening gap between `p50_ms` and `p99_ms` indicates Solr-side strain. Solr's `timeouts` counts only requests Solr itself cut short and answered with partial results (as `timeAllowed` would, which NameRes does not set), so it normally stays at 0; requests NameRes gave up on are `recent_queries.timeouts`.
 - `cache` — `filterCache` and `queryResultCache`, each with `hitratio`, `lookups`, `hits`, `evictions`, and `size`. A low hit ratio with high evictions means the cache is undersized for the query mix; NameRes filters heavily (`fq`), so `filterCache` usually matters most.
 - `jvm` — Solr's heap (`heap_used_mb`/`heap_max_mb`/`heap_used_pct`), process `cpu_load`, and cumulative GC activity (`gc_count`/`gc_time_ms`). Rising `gc_time_ms` relative to uptime signals heap pressure.
 - `os` — what the JVM's operating system reports, for **sizing the pod's CPU/memory requests**: `available_processors`, `system_load_average`, `system_cpu_load`, and `total_physical_mem_mb`. In a container, `available_processors` and `total_physical_mem_mb` are the container's limits rather than the machine's; `system_load_average` is machine-wide. Because Solr mmaps its index, physical memory beyond the heap becomes OS page cache for the (read-only) index — so the pod generally wants RAM well above `heap_max_mb` and ideally approaching the on-disk index `size`. (Free physical memory is intentionally not reported: Solr's JVM exposes only Linux `MemFree`, which excludes page cache and so reads near-zero on a healthy node — misleading rather than useful. For a true page-cache view of the Solr host, run a node-level exporter such as node_exporter/Prometheus there.)
