@@ -104,6 +104,21 @@ def test_status_metrics_param():
     assert not isinstance(sm['query_handler']['errors'], dict)
 
 
+def test_status_reports_cache_metrics():
+    """The cache figures are read from Solr, not left null.
+
+    Solr 9 registers its searcher caches as CACHE.searcher.*; reading CACHE.core.* instead
+    returned null for every field, which a key-presence check cannot catch.
+    """
+    client = TestClient(app)
+    # A type filter goes through filterCache, so it has at least one lookup to report.
+    client.get("/lookup", params={'string': 'Parkinson', 'biolink_type': 'biolink:Disease'})
+    sm = client.get("/status", params={'full': 'true'}).json()['solr_metrics']
+    filter_cache = sm['cache']['filterCache']
+    assert isinstance(filter_cache['lookups'], int) and filter_cache['lookups'] > 0
+    assert isinstance(sm['cache']['queryResultCache']['lookups'], int)
+
+
 def test_status_recent_queries_populated():
     """After a lookup, recent_queries should reflect at least one recorded time."""
     client = TestClient(app)

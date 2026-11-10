@@ -153,8 +153,10 @@ async def status(full: bool = False) -> Dict:
                     ('group', 'core'),
                     ('group', 'jvm'),
                     ('prefix', 'QUERY./select'),
-                    ('prefix', 'CACHE.core.filterCache'),
-                    ('prefix', 'CACHE.core.queryResultCache'),
+                    # Solr 9 registers the searcher caches as CACHE.searcher.*, not
+                    # CACHE.core.* -- a wrong name here yields nulls, not an error.
+                    ('prefix', 'CACHE.searcher.filterCache'),
+                    ('prefix', 'CACHE.searcher.queryResultCache'),
                     ('prefix', 'memory.heap'),
                     ('prefix', 'gc.'),
                     ('prefix', 'os.'),
@@ -186,7 +188,7 @@ async def status(full: bool = False) -> Dict:
                     # NameRes leans on fq (prefix/type/taxon filters), so filterCache matters
                     # as much as queryResultCache. Rising evictions => cache too small.
                     def _cache(name):
-                        c = core_data.get(f'CACHE.core.{name}', {})
+                        c = core_data.get(f'CACHE.searcher.{name}', {})
                         return {
                             'hitratio': c.get('hitratio'),
                             'lookups': c.get('lookups'),
