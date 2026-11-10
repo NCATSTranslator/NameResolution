@@ -79,6 +79,17 @@ def test_status_shape():
         assert key not in data['solr']
 
 
+def test_status_reports_solr_last():
+    """`solr` comes last, after config and recent_queries, which are what a person
+    reading /status mostly wants; it is a long block of diagnostics. JSON consumers must
+    not rely on key order -- this pins only what a reader sees first."""
+    client = TestClient(app)
+    for params in ({}, {'full': 'true'}):
+        keys = list(client.get("/status", params=params).json())
+        assert keys[-1] == 'solr'
+        assert keys.index('config') < keys.index('recent_queries') < keys.index('solr')
+
+
 def test_status_metrics_param():
     """With ?full=true, Solr's health metrics are added to `solr`, with the expected structure."""
     client = TestClient(app)

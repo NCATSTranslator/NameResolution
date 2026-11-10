@@ -362,6 +362,14 @@ async def status(full: bool = False) -> Dict:
             'status': 'ok',
             'message': 'Reporting results from primary core.',
             **common,
+            # Timed by NameRes itself rather than read from Solr, so not under 'solr'.
+            'recent_queries': recent_queries,
+            # Last, in both branches, deliberately: a person reading /status mostly wants
+            # the versions, config and recent_queries above, while 'solr' is a long block
+            # of diagnostics mainly for tracking and tuning performance. JSON objects are
+            # unordered, so nothing may depend on this -- it only decides what a reader
+            # sees first. tests/test_status.py pins it.
+            #
             # Everything read from Solr goes under 'solr', named after `backend`'s value,
             # so that it can't collide with the service's own keys: until #296 the Solr
             # index version sat at the top level as 'version', which is the key NodeNorm
@@ -387,8 +395,6 @@ async def status(full: bool = False) -> Dict:
                 'size': index.get('size', ''),
                 **metrics,
             },
-            # Timed by NameRes itself rather than read from Solr, so not under 'solr'.
-            'recent_queries': recent_queries,
         }
     else:
         return {

@@ -359,13 +359,6 @@ apart.
 reported under the same key by [NodeNorm's `/status`](https://github.com/NCATSTranslator/NodeNormalization).
 `nameres_version` is the same value with a leading `v`, and is retained for consumers that already read it.
 
-`solr` collects what NameRes reads from its Solr core: the name of the `core` it is reporting on, the core's
-`startTime`, and the index's `numDocs`, `maxDoc`, `deletedDocs`, `version`, `segmentCount`, `lastModified` and `size`.
-`solr.version` is Solr's index version counter, not a release of anything. The key is named after `backend`'s value.
-With `?full=true` it also holds Solr's health metrics (`queries`, `cache`, `jvm` and `os`; see below). When the expected
-core is not found (`"status": "error"`), `solr` is absent, or with `?full=true` holds only `jvm` and `os`. **Before
-NameRes v1.8.0 these fields were at the top level**, and `solr.version` was the top-level `version`.
-
 The `config` object reports publicly-relevant configuration for this instance; currently just
 `minimum_query_length`, the shortest query (in characters, after whitespace is stripped) that `/lookup` and
 `/bulk-lookup` will search for in the default tokenized search. It defaults to 2 and can be set per deployment with the
@@ -388,6 +381,17 @@ accepts any non-empty string.
   "nameres_version": "v1.7.0",
   "config": {
     "minimum_query_length": 2
+  },
+  "recent_queries": {
+    "max": 50000,
+    "count": 50000,
+    "mean_time_ms": 42.3,
+    "mean_solr_time_ms": 38.1,
+    "p50_ms": 21.0,
+    "p95_ms": 140.5,
+    "p99_ms": 410.2,
+    "failed": 0,
+    "timed_out": 0
   },
   "solr": {
     "core": "name_lookup",
@@ -438,22 +442,18 @@ accepts any non-empty string.
       "system_cpu_load": 0.42,
       "total_physical_mem_mb": 65536.0
     }
-  },
-  "recent_queries": {
-    "max": 50000,
-    "count": 50000,
-    "mean_time_ms": 42.3,
-    "mean_solr_time_ms": 38.1,
-    "p50_ms": 21.0,
-    "p95_ms": 140.5,
-    "p99_ms": 410.2,
-    "failed": 0,
-    "timed_out": 0
   }
 }
 ```
 
 `recent_queries` tracks the most recent `/lookup` queries handled by this NameRes instance. `max` is the size of the tracking window (default 50000, configurable via the `RECENT_TIMES_COUNT` environment variable) and `count` is how many queries have actually been recorded so far. `mean_time_ms` is the total end-to-end time; `mean_solr_time_ms` isolates the time spent waiting for Solr, which helps distinguish Solr-side strain from NameRes processing overhead. `p50_ms`/`p95_ms`/`p99_ms` are the end-to-end latency percentiles the caller actually sees; comparing them against `solr.queries`' Solr-side percentiles localizes a latency tail to Solr vs. NameRes. These are computed from local data (no Solr round-trip), so they are present on the default `/status` path. All of these are `null` until at least a couple of queries have been handled. `failed` is how many of the queries in the window failed (Solr returned an error, could not be reached, or did not answer within `SOLR_TIMEOUT_SECONDS`), and `timed_out` is how many of those were timeouts. Failed queries are included in the timings above, since their callers waited for them too.
+
+`solr` collects what NameRes reads from its Solr core: the name of the `core` it is reporting on, the core's
+`startTime`, and the index's `numDocs`, `maxDoc`, `deletedDocs`, `version`, `segmentCount`, `lastModified` and `size`.
+`solr.version` is Solr's index version counter, not a release of anything. The key is named after `backend`'s value.
+With `?full=true` it also holds Solr's health metrics (`queries`, `cache`, `jvm` and `os`; see below). When the expected
+core is not found (`"status": "error"`), `solr` is absent, or with `?full=true` holds only `jvm` and `os`. **Before
+NameRes v1.8.0 these fields were at the top level**, and `solr.version` was the top-level `version`.
 
 `solr.queries`, `solr.cache`, `solr.jvm` and `solr.os` are Solr's own health metrics, read from its `/admin/metrics` API. They are only included when the `?full=true` query parameter is passed, as fetching them requires an additional round-trip to Solr; the default `/status` stays cheap for Kubernetes liveness probes. With `?full=true`, a failed fetch is reported as `solr.metrics_error` in their place, so it cannot be mistaken for a request that did not ask for metrics. Any individual field is `null` when the underlying Solr metric is unavailable (e.g. a cache that isn't configured). The blocks are:
 
