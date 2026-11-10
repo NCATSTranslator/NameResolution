@@ -121,7 +121,7 @@ async def docs_redirect():
 
 @app.get("/status",
          summary="Get status and counts for this NameRes instance.",
-         description="<p>This endpoint will return status information and a list of counts from the underlying Solr database instance for this NameRes instance.</p>"
+         description="<p>This endpoint will return status information for this NameRes instance, with the counts and statistics read from its Solr core grouped under <code>solr</code>.</p>"
                      "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#status\">API documentation</a>.</p>"
          )
 async def status_get(full: bool = False) -> Dict:
@@ -268,11 +268,12 @@ async def status(full: bool = False) -> Dict:
     biolink_model_url = f"https://github.com/biolink/biolink-model/tree/{biolink_model_tag}"
     biolink_model_download_url = f"https://raw.githubusercontent.com/biolink/biolink-model/{biolink_model_tag}/biolink-model.yaml"
 
-    # Figure out the NameRes version.
-    nameres_version = "master"
-    app_info = get_app_info()
-    if 'version' in app_info and app_info['version']:
-        nameres_version = 'v' + app_info['version']
+    # Figure out the NameRes version. We report it twice, deliberately: `version` is the
+    # OpenAPI info.version verbatim, so that it can be compared against /openapi.json and
+    # against NodeNorm's /status, which reports the same key the same way (issue #296);
+    # `nameres_version` is the older 'v'-prefixed spelling, kept for existing consumers.
+    openapi_version = get_app_info().get('version') or ''
+    nameres_version = 'v' + openapi_version if openapi_version else 'master'
 
     # Prepare recent times for reporting.
     # End-to-end latency percentiles over the window. These measure the full round-trip
@@ -305,9 +306,33 @@ async def status(full: bool = False) -> Dict:
     # name_lookup_shard1_replica_n1. A NameRes Solr only ever has one core, so if the
     # expected name isn't there but there is exactly one core, report on that one.
     cores = result.get('status', {})
-    core = cores.get(config.solr_core)
+    core_name = config.solr_core
+    core = cores.get(core_name)
     if core is None and len(cores) == 1:
-        core = next(iter(cores.values()))
+        core_name, core = next(iter(cores.items()))
+
+    # The fields both branches below report. Built once and spread into each, so that the
+    # two can't drift: the error branch is what a mis-pointed or still-loading deployment
+    # returns, and that is exactly the case in which a caller most needs to know which
+    # NameRes it reached.
+    common = {
+        # Always 'solr' from this implementation. The field exists so that callers can
+        # tell us apart from the Elasticsearch-backed NameRes at
+        # biothings/NameResolutionAPI, which reports 'elasticsearch' here; until it
+        # existed the only difference between the two was a word of prose in `message`
+        # (issue #296).
+        'backend': 'solr',
+        'version': openapi_version or 'unknown',
+        'babel_version': babel_version,
+        'babel_version_url': babel_version_url,
+        'biolink_model': {
+            'tag': biolink_model_tag,
+            'url': biolink_model_url,
+            'download_url': biolink_model_download_url,
+        },
+        'nameres_version': nameres_version,
+        'config': config.public(),
+    }
 
     if core is not None:
         index = {}
@@ -317,27 +342,32 @@ async def status(full: bool = False) -> Dict:
         return {
             'status': 'ok',
             'message': 'Reporting results from primary core.',
-            'babel_version': babel_version,
-            'babel_version_url': babel_version_url,
-            'biolink_model': {
-                'tag': biolink_model_tag,
-                'url': biolink_model_url,
-                'download_url': biolink_model_download_url,
+            **common,
+            # Everything read from Solr goes under 'solr', named after `backend`'s value,
+            # so that it can't collide with the service's own keys: until #296 the Solr
+            # index version sat at the top level as 'version', which is the key NodeNorm
+            # uses for the API version. This is the same layout as the improve-performance
+            # branch (deployed as release-v1.5.2-with-metrics), whose JVM, OS and cache
+            # stats belong in here too.
+            'solr': {
+                # The core actually reported on, which the single-core fallback above
+                # means is not necessarily config.solr_core.
+                'core': core_name,
+                # .get() rather than [], like every field below it: Solr's core STATUS
+                # returns a sparse entry for a core that is still initializing, and
+                # /status is what the Kubernetes probes call. A KeyError here would turn
+                # a startup window into a 500 instead of a report with blank counts.
+                'startTime': core.get('startTime', ''),
+                'numDocs': index.get('numDocs', ''),
+                'maxDoc': index.get('maxDoc', ''),
+                'deletedDocs': index.get('deletedDocs', ''),
+                # Solr's index version counter, not a release of anything.
+                'version': index.get('version', ''),
+                'segmentCount': index.get('segmentCount', ''),
+                'lastModified': index.get('lastModified', ''),
+                'size': index.get('size', ''),
             },
-            'nameres_version': nameres_version,
-            'config': config.public(),
-            # .get() rather than [], like every field below it: Solr's core STATUS
-            # returns a sparse entry for a core that is still initializing, and
-            # /status is what the Kubernetes probes call. A KeyError here would turn
-            # a startup window into a 500 instead of a report with blank counts.
-            'startTime': core.get('startTime', ''),
-            'numDocs': index.get('numDocs', ''),
-            'maxDoc': index.get('maxDoc', ''),
-            'deletedDocs': index.get('deletedDocs', ''),
-            'version': index.get('version', ''),
-            'segmentCount': index.get('segmentCount', ''),
-            'lastModified': index.get('lastModified', ''),
-            'size': index.get('size', ''),
+            # Timed by NameRes itself rather than read from Solr.
             'recent_queries': recent_queries,
             'solr_metrics': solr_metrics,
         }
@@ -345,16 +375,8 @@ async def status(full: bool = False) -> Dict:
         return {
             'status': 'error',
             'message': 'Expected core not found.',
-            'babel_version': babel_version,
-            'babel_version_url': babel_version_url,
-            'biolink_model': {
-                'tag': biolink_model_tag,
-                'url': biolink_model_url,
-                'download_url': biolink_model_download_url,
-            },
+            **common,
             'recent_queries': recent_queries,
-            'nameres_version': nameres_version,
-            'config': config.public(),
             'solr_metrics': solr_metrics,
         }
 

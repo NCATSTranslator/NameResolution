@@ -39,7 +39,7 @@ Cumulative `/select` statistics straight from Solr.
 | `mean_ms` | Mean Solr-side request time. |
 | `p50_ms` / `p95_ms` / `p99_ms` | Solr-side latency percentiles. `p99_ms` spiking while `p50_ms` stays stable = occasional GC pauses or one-off expensive queries; all of them rising = sustained overload. Compare against `recent_queries` percentiles to tell Solr-side tails from NameRes-side ones. |
 
-### Index health (top level of `/status`)
+### Index health (`solr`)
 
 | Field | What it means |
 |---|---|
@@ -187,7 +187,7 @@ Solr seems slow or the service is unresponsive
 ├─ Step 4: Check solr_metrics.jvm.cpu_load (and host.system_cpu_load)
 │    │
 │    ├─ > 0.80 → CPU SATURATION
-│    │    ├─ segmentCount > 20 → optimize to merge segments
+│    │    ├─ solr.segmentCount > 20 → optimize to merge segments
 │    │    │    POST http://<solr-host>:8983/solr/name_lookup/update?optimize=true
 │    │    ├─ SLOW QUERY warnings for specific queries (many filters, leading wildcards)?
 │    │    │    Fix: cache common filter combinations; avoid leading wildcards
