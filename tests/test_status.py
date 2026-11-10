@@ -534,7 +534,8 @@ def test_cancelled_lookup_is_recorded(monkeypatch, caplog):
 
 
 def test_recent_lookups_window():
-    """The running totals stay exact as entries are evicted, and match a recomputation."""
+    """The counts stay exact as entries are evicted, and every figure is of what the
+    window holds now."""
     from api.server import RecentLookups
     window = RecentLookups(3)
     window.record(1_000_000, 500_000)
@@ -558,8 +559,9 @@ def test_recent_lookups_window():
 
 
 def test_recent_lookups_percentiles_are_cached(monkeypatch):
-    """The min, max and percentiles cost a sort of the whole window, so /status reuses them
-    for up to PERCENTILE_CACHE_SECONDS rather than re-sorting on every probe."""
+    """The latency figures cost a sort of the whole window, so /status reuses them for up
+    to PERCENTILE_CACHE_SECONDS rather than re-sorting on every probe. A series' mean is
+    cached with its min and max, so that the three always agree."""
     import api.server
     clock = [1000.0]
     monkeypatch.setattr(api.server.time, "monotonic", lambda: clock[0])
@@ -576,11 +578,14 @@ def test_recent_lookups_percentiles_are_cached(monkeypatch):
     window.record(100_000_000, 0)
     cached = window.summary()
     assert cached['lookup_ms']['p50'] == 1.0 and cached['lookup_ms']['max'] == 1.0   # still cached
-    assert cached['requests'] == 4 and cached['lookup_ms']['mean'] == 50.5   # but totals are current
+    # The mean is from the same moment as the max: a current mean of 50.5 beside a cached
+    # max of 1.0 is what this used to report.
+    assert cached['lookup_ms']['mean'] == 1.0
+    assert cached['requests'] == 4   # but the counts are current
 
     clock[0] += api.server.PERCENTILE_CACHE_SECONDS
     fresh = window.summary()['lookup_ms']
-    assert fresh['p50'] == 50.5 and fresh['max'] == 100.0
+    assert fresh['p50'] == 50.5 and fresh['max'] == 100.0 and fresh['mean'] == 50.5
 
 
 def test_recent_lookups_percentiles_stay_within_observed_times():

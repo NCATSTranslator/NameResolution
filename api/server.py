@@ -118,8 +118,8 @@ def diagnostic_setting(name: str, default, parse):
 DEFAULT_RECENT_TIMES_COUNT = 50000
 RECENT_TIMES_COUNT = diagnostic_setting("RECENT_TIMES_COUNT", DEFAULT_RECENT_TIMES_COUNT, int)
 
-# How long /status may reuse the latency min, max and percentiles it last computed; see
-# RecentLookups.summary().
+# How long /status may reuse the latency figures (mean, min, max and percentiles) it last
+# computed; see RecentLookups.summary().
 PERCENTILE_CACHE_SECONDS = 10
 
 
@@ -128,12 +128,17 @@ class RecentLookups:
     The last `maxlen` /lookup timings and outcomes, which /status reports as recent_queries.
 
     /status is what the Kubernetes probes call, so it has to stay cheap however full the
-    window is. The counts and means are therefore running totals, updated as each entry is
-    added and evicted, rather than a pass over the window per request. Times are kept as
-    integer nanoseconds, so that those totals don't drift however many entries pass
-    through. The min, max and percentiles need a sort of the whole window (a few ms at
-    50000 entries, on the event loop, for each of the two series), so summary() reuses the
-    last ones for up to PERCENTILE_CACHE_SECONDS.
+    window is. The counts are therefore running totals, updated as each entry is added and
+    evicted, rather than a pass over the window per request. The latency figures need a
+    sort of the whole window (a few ms at 50000 entries, on the event loop, for each of the
+    two series), so summary() reuses the last ones for up to PERCENTILE_CACHE_SECONDS.
+
+    A series' mean is computed in the same pass as its min, max and percentiles, though a
+    running total could keep it current: a current mean beside a min and max up to 10 s old
+    reported a mean above the max after a burst of slow lookups, and figures that disagree
+    with each other read as broken just when latency is rising. So each series' figures
+    describe one moment, while the counts are current. Times are integer nanoseconds, so a
+    mean is an exact sum however many entries pass through.
 
     Everything here runs on the event loop with no await, so it needs no lock.
     """
@@ -143,8 +148,6 @@ class RecentLookups:
         # (total_ns, solr_ns, outcome) per lookup, oldest first. Evicted by hand, not by
         # deque(maxlen=...), so that the totals below can subtract what leaves.
         self._entries = deque()
-        self._total_ns = 0
-        self._solr_ns = 0
         self._outcomes = Counter()
         # Lookups ever recorded: tells summary() whether its cached order statistics are stale.
         self._recorded = 0
@@ -153,15 +156,16 @@ class RecentLookups:
         self._order_stats_recorded = 0
         self._order_stats_at = 0.0
 
-    _NO_ORDER_STATS = {'min': None, 'max': None, 'p50': None, 'p95': None, 'p99': None}
+    _NO_ORDER_STATS = {'mean': None, 'min': None, 'max': None, 'p50': None, 'p95': None, 'p99': None}
     # Which element of an entry each timed series is.
     _SERIES = {'lookup': 0, 'solr_round_trip': 1}
 
     @classmethod
     def _order_stats_of(cls, times_ns: List[int]) -> Dict:
-        """ min, max, p50, p95 and p99 of `times_ns` (sorted), in ms. """
+        """ mean, min, max, p50, p95 and p99 of `times_ns` (sorted), in ms. """
         stats = dict(cls._NO_ORDER_STATS)
         if times_ns:
+            stats['mean'] = sum(times_ns) / len(times_ns)
             stats['min'], stats['max'] = times_ns[0], times_ns[-1]
         if len(times_ns) >= 2:
             # 'inclusive' keeps every percentile within the observed times. The default
@@ -177,18 +181,15 @@ class RecentLookups:
         if self.maxlen <= 0:
             return
         if len(self._entries) >= self.maxlen:
-            old_total_ns, old_solr_ns, old_outcome = self._entries.popleft()
-            self._total_ns -= old_total_ns
-            self._solr_ns -= old_solr_ns
+            _, _, old_outcome = self._entries.popleft()
             self._outcomes[old_outcome] -= 1
         self._entries.append((total_ns, solr_ns, outcome))
-        self._total_ns += total_ns
-        self._solr_ns += solr_ns
         self._outcomes[outcome] += 1
         self._recorded += 1
 
     def _current_order_stats(self) -> Dict:
-        """ The order statistics of each series, keyed as _SERIES. Recomputed only if lookups
+        """ The latency figures (mean and order statistics) of each series, keyed as
+        _SERIES. Recomputed only if lookups
         have arrived since the last computation and it is more than PERCENTILE_CACHE_SECONDS
         old -- or it was made before there were the two lookups that percentiles need. One
         sort per series, so two sorts of the window per recomputation. """
@@ -211,9 +212,6 @@ class RecentLookups:
 
         order_stats = self._current_order_stats()
 
-        def _mean_ms(total_ns):
-            return round(total_ns / count / 1_000_000, 2) if count else None
-
         # The latencies are grouped by what they time, and named for it, so that nobody
         # reading /status takes lookup_ms for solr.queries.handler_ms: they time different
         # spans, and the gap between them is NameRes's own overhead. The counts aren't
@@ -235,12 +233,12 @@ class RecentLookups:
             'cancelled': self._outcomes['cancelled'],
             # The whole of lookup(): Solr round trip plus building the results. It doesn't
             # include FastAPI's handling of the request or the network to the caller.
-            'lookup_ms': {'mean': _mean_ms(self._total_ns), **order_stats['lookup']},
+            'lookup_ms': order_stats['lookup'],
             # The part of lookup_ms spent on the Solr request, as NameRes sees it: setting
             # up the HTTP client and connection, Solr's handling (solr.queries.handler_ms),
             # the response's transfer, and decoding its JSON. The lookup log line's
             # "for the Solr round trip" figure.
-            'solr_round_trip_ms': {'mean': _mean_ms(self._solr_ns), **order_stats['solr_round_trip']},
+            'solr_round_trip_ms': order_stats['solr_round_trip'],
         }
 
 

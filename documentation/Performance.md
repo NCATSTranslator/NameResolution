@@ -45,9 +45,10 @@ query take about 8 ms.
 | `requests` / `window_size` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). Unlike `solr.queries.requests`, `requests` is windowed, not cumulative, so the two can't be compared. |
 | `errors` / `timeouts` / `cancelled` | Queries in the window that failed: `timeouts` hit `SOLR_TIMEOUT_SECONDS`, `cancelled` were abandoned while waiting on Solr (a server shutdown, say), and `errors` are the rest (Solr returned an error or couldn't be reached, or NameRes couldn't build results from its answer). They are disjoint, so their sum is every failure. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `lookup_ms.p99` and `max` too. |
 
-The means are running totals and always current. `min`, `max` and the percentiles need a sort of
-the whole window, so `/status` reuses them for up to 10 seconds; the percentiles need at least
-two lookups in the window.
+The counts (`requests`, `errors`, `timeouts`, `cancelled`) are always current. The latency
+figures need a sort of the whole window, so `/status` reuses them for up to 10 seconds; each of
+`lookup_ms` and `solr_round_trip_ms` is computed in one pass, so its `mean` always lies between its
+`min` and `max`. The percentiles need at least two lookups in the window.
 
 ### Solr queries (`solr.queries`)
 
