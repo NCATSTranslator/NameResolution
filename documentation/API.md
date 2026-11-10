@@ -452,8 +452,7 @@ accepts any non-empty string.
 `startTime`, and the index's `numDocs`, `maxDoc`, `deletedDocs`, `version`, `segmentCount`, `lastModified` and `size`.
 `solr.version` is Solr's index version counter, not a release of anything. The key is named after `backend`'s value.
 With `?full=true` it also holds Solr's health metrics (`queries`, `cache`, `jvm` and `os`; see below). When the expected
-core is not found (`"status": "error"`), `solr` is absent, or with `?full=true` holds only `jvm` and `os`. **Before
-NameRes v1.8.0 these fields were at the top level**, and `solr.version` was the top-level `version`.
+core is not found (`"status": "error"`), `solr` is absent, or with `?full=true` holds only `jvm` and `os`. **In NameRes v1.7.1 and earlier these fields were at the top level**, and `solr.version` was the top-level `version`.
 
 `solr.queries`, `solr.cache`, `solr.jvm` and `solr.os` are Solr's own health metrics, read from its `/admin/metrics` API. They are only included when the `?full=true` query parameter is passed, as fetching them requires an additional round-trip to Solr; the default `/status` stays cheap for Kubernetes liveness probes. With `?full=true`, a failed fetch is reported as `solr.metrics_error` in their place, so it cannot be mistaken for a request that did not ask for metrics. Any individual field is `null` when the underlying Solr metric is unavailable (e.g. a cache that isn't configured). The blocks are:
 
