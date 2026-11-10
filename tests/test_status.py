@@ -31,14 +31,20 @@ def test_status():
     assert status['version'] == client.get("/openapi.json").json()['info']['version']
     assert status['nameres_version'] == 'v' + status['version']
 
-    # The Solr index version, called 'version' until #296.
-    assert status['index_version'] > 1
+    # Everything read from Solr is grouped under 'solr'. Until #296 these fields sat at
+    # the top level, where the index version was 'version'; make sure none of them has
+    # crept back out.
+    for key in ('numDocs', 'maxDoc', 'deletedDocs', 'segmentCount', 'size', 'startTime',
+                'lastModified', 'index_version'):
+        assert key not in status
+    solr = status['solr']
 
-    assert status['size'] != ''
-    assert status['startTime']
+    assert solr['core'] == 'name_lookup'
+    assert solr['version'] > 1
+    assert solr['size'] != ''
+    assert solr['startTime']
 
     # Count the specific number of test documents we load.
-    assert status['numDocs'] == 89
-    assert status['maxDoc'] == 89
-    assert status['deletedDocs'] == 0
-
+    assert solr['numDocs'] == 89
+    assert solr['maxDoc'] == 89
+    assert solr['deletedDocs'] == 0

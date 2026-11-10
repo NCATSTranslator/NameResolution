@@ -98,7 +98,7 @@ async def docs_redirect():
 
 @app.get("/status",
          summary="Get status and counts for this NameRes instance.",
-         description="<p>This endpoint will return status information and a list of counts from the underlying Solr database instance for this NameRes instance.</p>"
+         description="<p>This endpoint will return status information for this NameRes instance, with the counts and statistics read from its Solr core grouped under <code>solr</code>.</p>"
                      "<p>You can find out more about this endpoint in the <a href=\"https://github.com/NCATSTranslator/NameResolution/blob/master/documentation/API.md#status\">API documentation</a>.</p>"
          )
 async def status_get() -> Dict:
@@ -140,9 +140,10 @@ async def status() -> Dict:
     # name_lookup_shard1_replica_n1. A NameRes Solr only ever has one core, so if the
     # expected name isn't there but there is exactly one core, report on that one.
     cores = result.get('status', {})
-    core = cores.get(config.solr_core)
+    core_name = config.solr_core
+    core = cores.get(core_name)
     if core is None and len(cores) == 1:
-        core = next(iter(cores.values()))
+        core_name, core = next(iter(cores.items()))
 
     # The fields both branches below report. Built once and spread into each, so that the
     # two can't drift: the error branch is what a mis-pointed or still-loading deployment
@@ -176,20 +177,30 @@ async def status() -> Dict:
             'status': 'ok',
             'message': 'Reporting results from primary core.',
             **common,
-            # .get() rather than [], like every field below it: Solr's core STATUS
-            # returns a sparse entry for a core that is still initializing, and
-            # /status is what the Kubernetes probes call. A KeyError here would turn
-            # a startup window into a 500 instead of a report with blank counts.
-            'startTime': core.get('startTime', ''),
-            'numDocs': index.get('numDocs', ''),
-            'maxDoc': index.get('maxDoc', ''),
-            'deletedDocs': index.get('deletedDocs', ''),
-            # The Solr index version. Called 'version' until #296, which handed that key
-            # to the API version so that NameRes and NodeNorm spell it the same way.
-            'index_version': index.get('version', ''),
-            'segmentCount': index.get('segmentCount', ''),
-            'lastModified': index.get('lastModified', ''),
-            'size': index.get('size', ''),
+            # Everything read from Solr goes under 'solr', named after `backend`'s value,
+            # so that it can't collide with the service's own keys: until #296 the Solr
+            # index version sat at the top level as 'version', which is the key NodeNorm
+            # uses for the API version. This is the same layout as the improve-performance
+            # branch (deployed as release-v1.5.2-with-metrics), whose JVM, OS and cache
+            # stats belong in here too.
+            'solr': {
+                # The core actually reported on, which the single-core fallback above
+                # means is not necessarily config.solr_core.
+                'core': core_name,
+                # .get() rather than [], like every field below it: Solr's core STATUS
+                # returns a sparse entry for a core that is still initializing, and
+                # /status is what the Kubernetes probes call. A KeyError here would turn
+                # a startup window into a 500 instead of a report with blank counts.
+                'startTime': core.get('startTime', ''),
+                'numDocs': index.get('numDocs', ''),
+                'maxDoc': index.get('maxDoc', ''),
+                'deletedDocs': index.get('deletedDocs', ''),
+                # Solr's index version counter, not a release of anything.
+                'version': index.get('version', ''),
+                'segmentCount': index.get('segmentCount', ''),
+                'lastModified': index.get('lastModified', ''),
+                'size': index.get('size', ''),
+            },
         }
     else:
         return {
