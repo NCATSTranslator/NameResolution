@@ -80,7 +80,7 @@ rather than Solr's lifetime.
 | `heap_used_pct` | Percentage of JVM heap in use (0–100). **> 80 = memory pressure.** |
 | `heap_used_mb` / `heap_max_mb` | Absolute heap figures. Max is set by `-Xmx` in Solr's JVM config (`SOLR_JAVA_MEM`). |
 | `cpu_load` | Solr process CPU (0.0–1.0). **> 0.80 = CPU saturation.** |
-| `gc_count` / `gc_time_ms` | Cumulative garbage-collection pause count and total pause time across all collectors. Rising `gc_time_ms` relative to uptime = heap pressure (and a source of `handler_ms.p99` spikes). |
+| `gc_count` / `gc_time_ms` | Cumulative garbage-collection pause count and total pause time across all collectors. Collectors that time concurrent work rather than pauses (G1's `G1 Concurrent GC` on JDK 20+, ZGC's and Shenandoah's `… Cycles`) are left out. Rising `gc_time_ms` relative to uptime = heap pressure (and a source of `handler_ms.p99` spikes). |
 
 ### OS resources (`solr.os`)
 

@@ -394,9 +394,24 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
         # Skip anything non-numeric rather than letting one odd gauge fail the whole block.
         # No usable gauge at all is None, not 0: a sum of nothing would report a misread
         # metric name, or a Solr that stopped sending them, as a JVM that never collected.
+        #
+        # Solr names each gauge after a GarbageCollectorMXBean, spaces turned to hyphens.
+        # Some beans time concurrent work that runs beside the application rather than
+        # pausing it, and are left out so that the totals stay pause totals. As checked on
+        # Temurin 21: G1 adds 'G1 Concurrent GC' (from JDK 20) to 'G1 Young Generation' and
+        # 'G1 Old Generation'; ZGC has 'ZGC Cycles' and 'ZGC Pauses' ('ZGC Minor/Major
+        # Cycles/Pauses' when generational); Shenandoah 'Shenandoah Cycles' and
+        # 'Shenandoah Pauses'. Solr 9.10's image runs JDK 17, which has none of these
+        # concurrent beans under G1, but a Solr on a newer JDK would otherwise count G1's
+        # concurrent marking as pause time.
+        def _is_pause_collector(key):
+            collector = key[len('gc.'):].rsplit('.', 1)[0]
+            return 'Concurrent' not in collector and not collector.endswith('Cycles')
+
         def _gc_total(suffix):
             values = [v for k, v in jvm.items()
-                      if k.startswith('gc.') and k.endswith(suffix) and _number(v) is not None]
+                      if k.startswith('gc.') and k.endswith(suffix) and _is_pause_collector(k)
+                      and _number(v) is not None]
             return sum(values) if values else None
 
         metrics['jvm'] = {

@@ -274,6 +274,31 @@ def test_status_reports_missing_gc_metrics_as_null(monkeypatch):
     assert jvm['gc_count'] is None and jvm['gc_time_ms'] is None
 
 
+@pytest.mark.parametrize("gauges, count, time_ms", [
+    # G1 on JDK 20+: the concurrent bean times marking that runs beside the application.
+    ({'gc.G1-Young-Generation.count': 8, 'gc.G1-Young-Generation.time': 36,
+      'gc.G1-Old-Generation.count': 1, 'gc.G1-Old-Generation.time': 4,
+      'gc.G1-Concurrent-GC.count': 5, 'gc.G1-Concurrent-GC.time': 900}, 9, 40),
+    # ZGC, and generational ZGC: the Cycles beans are concurrent, the Pauses beans aren't.
+    ({'gc.ZGC-Cycles.count': 3, 'gc.ZGC-Cycles.time': 700,
+      'gc.ZGC-Pauses.count': 9, 'gc.ZGC-Pauses.time': 2}, 9, 2),
+    ({'gc.ZGC-Minor-Cycles.time': 500, 'gc.ZGC-Minor-Pauses.time': 1,
+      'gc.ZGC-Major-Cycles.time': 800, 'gc.ZGC-Major-Pauses.time': 3}, None, 4),
+    ({'gc.Shenandoah-Cycles.time': 600, 'gc.Shenandoah-Pauses.time': 5}, None, 5),
+])
+def test_status_gc_totals_count_only_pauses(monkeypatch, gauges, count, time_ms):
+    """gc_count and gc_time_ms are pause totals, so the beans that time concurrent GC work
+    are left out (bean names as a Temurin 21 JVM reports them)."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.name_lookup': {},
+            'solr.jvm': gauges,
+        }})))
+    client = TestClient(app)
+    jvm = client.get("/status", params={'full': 'true'}).json()['solr']['jvm']
+    assert jvm['gc_count'] == count and jvm['gc_time_ms'] == time_ms
+
+
 # Two cores, neither of them name_lookup, so the single-core fallback can't rescue it and
 # status() takes its error branch.
 MISPOINTED_CORES = {'other_a': {}, 'other_b': {}}
