@@ -347,8 +347,8 @@ POST /synonyms with body:
 Returns the status of the service. Most importantly, this returns the [Babel](https://github.com/NCATSTranslator/Babel)
 version and changelog URL, which can be used to determine which version of Babel is currently loaded in this service.
 It also includes the NameRes version (also visible in the OpenAPI documentation)
-and the Biolink Model version used to build the Solr database, as well as bunch of information from the underlying
-Solr database.
+and the Biolink Model version used to build the Solr database, as well as information read from the underlying
+Solr database, which is grouped under `solr`.
 
 `backend` names the database answering the query. It is always `"solr"` from this implementation; the
 Elasticsearch-backed NameRes at [biothings/NameResolutionAPI](https://github.com/biothings/NameResolutionAPI) reports
@@ -359,8 +359,11 @@ apart.
 reported under the same key by [NodeNorm's `/status`](https://github.com/NCATSTranslator/NodeNormalization).
 `nameres_version` is the same value with a leading `v`, and is retained for consumers that already read it.
 
-`index_version` is the Solr index version. **This field was called `version` before NameRes v1.8.0**, and was renamed
-so that `version` could carry the API version under the key NodeNorm already uses.
+`solr` collects what NameRes reads from its Solr core: the name of the `core` it is reporting on, the core's
+`startTime`, and the index's `numDocs`, `maxDoc`, `deletedDocs`, `version`, `segmentCount`, `lastModified` and `size`.
+`solr.version` is Solr's index version counter, not a release of anything. The key is named after `backend`'s value.
+It is absent when the expected core is not found (`"status": "error"`). **Before NameRes v1.8.0 these fields were at
+the top level**, and `solr.version` was the top-level `version`.
 
 The `config` object reports publicly-relevant configuration for this instance; currently just
 `minimum_query_length`, the shortest query (in characters, after whitespace is stripped) that `/lookup` and
@@ -385,13 +388,16 @@ accepts any non-empty string.
   "config": {
     "minimum_query_length": 2
   },
-  "startTime": "2025-12-19T11:53:09.638Z",
-  "numDocs": 425583391,
-  "maxDoc": 425586610,
-  "deletedDocs": 3219,
-  "index_version": 34838,
-  "segmentCount": 57,
-  "lastModified": "2025-09-24T19:09:56.524Z",
-  "size": "142.17 GB"
+  "solr": {
+    "core": "name_lookup",
+    "startTime": "2025-12-19T11:53:09.638Z",
+    "numDocs": 425583391,
+    "maxDoc": 425586610,
+    "deletedDocs": 3219,
+    "version": 34838,
+    "segmentCount": 57,
+    "lastModified": "2025-09-24T19:09:56.524Z",
+    "size": "142.17 GB"
+  }
 }
 ```
