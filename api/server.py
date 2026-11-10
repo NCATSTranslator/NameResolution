@@ -662,7 +662,7 @@ async def synonyms_post(
 
 async def name_lookup(curies) -> Dict[str, Dict]:
     """Returns a list of synonyms for a particular CURIE."""
-    time_start = time.time_ns()
+    time_start = time.perf_counter_ns()
     query = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
     curie_filter = " OR ".join(
         f"curie:\"{curie}\""
@@ -682,7 +682,7 @@ async def name_lookup(curies) -> Dict[str, Dict]:
     }
     for doc in response_json["response"]["docs"]:
         output[doc["curie"]] = doc
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
 
     logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)}: took {(time_end - time_start)/1_000_000:.2f}ms")
 
@@ -888,7 +888,10 @@ async def lookup(string: str,
         will be returned, rather than filtering to concepts that are both PhenotypicFeature and Disease.
     """
 
-    time_start = time.time_ns()
+    # Durations come from perf_counter_ns(), a monotonic clock, not time.time_ns(): the wall
+    # clock can be stepped (NTP, a VM resuming) mid-lookup, and a negative or inflated
+    # duration would then sit in recent_queries' min, max and mean until it left the window.
+    time_start = time.perf_counter_ns()
 
     # autocomplete asks us to treat the last word as a prefix; exact asks us to match the whole
     # string and nothing else. There is no sensible reading of the two together, so rather than
@@ -1098,7 +1101,7 @@ async def lookup(string: str,
     log_msg_prefix = (f"Lookup query to Solr for {json.dumps(string)} " +
                       f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}, exact={exact})")
 
-    time_solr_start = time.time_ns()
+    time_solr_start = time.perf_counter_ns()
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
     try:
         async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
@@ -1114,7 +1117,7 @@ async def lookup(string: str,
         # Solr is struggling. BaseException rather than Exception so that a lookup cancelled
         # while it waits on Solr (asyncio.CancelledError) is timed too: those are slow ones
         # as well. It is re-raised below, so nothing is swallowed.
-        time_failed = time.time_ns()
+        time_failed = time.perf_counter_ns()
         time_taken_ms = (time_failed - time_start)/1_000_000
         if isinstance(e, httpx.TimeoutException):
             outcome = 'timeout'
@@ -1133,7 +1136,7 @@ async def lookup(string: str,
     if 'debug' in response and 'explain' in response['debug']:
         explain_info = response['debug']['explain']
 
-    time_solr_end = time.time_ns()
+    time_solr_end = time.perf_counter_ns()
     logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
 
     # Associate highlighting information with search results.
@@ -1212,7 +1215,7 @@ async def lookup(string: str,
                            explain=explain_for_this_doc,
                            debug=debug_for_this_request))
 
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
     time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
     if not bulk:
@@ -1308,7 +1311,7 @@ class NameResQuery(BaseModel):
           tags=["lookup"]
 )
 async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
-    time_start = time.time_ns()
+    time_start = time.perf_counter_ns()
 
     # Bounded so that a single large request can't open a socket per string; see
     # Config.solr_max_concurrent_lookups.
@@ -1335,7 +1338,7 @@ async def bulk_lookup(query: NameResQuery) -> Dict[str, List[LookupResult]]:
     pairs = await asyncio.gather(*[do_lookup(s) for s in query.strings])
     result = dict(pairs)
 
-    time_end = time.time_ns()
+    time_end = time.perf_counter_ns()
     logger.info(f"Bulk lookup query for {len(query.strings)} strings ({query}): took {(time_end - time_start)/1_000_000:.2f}ms")
     return result
 
