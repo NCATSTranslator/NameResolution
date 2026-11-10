@@ -42,7 +42,7 @@ client and connection per query, that overhead took a 1 ms query on a local Solr
 | `lookup_ms.mean` | Mean lookup time. Rising mean = sustained slowdown. |
 | `lookup_ms.min` / `max` | The fastest and slowest lookups in the window. `max` is the single worst one — often a timeout (about `SOLR_TIMEOUT_SECONDS`), which then stays there until it ages out of the window; the SLOW QUERY and FAILED QUERY log lines say which query it was. `min` is usually a cache hit. |
 | `lookup_ms.p50` / `p95` / `p99` | Lookup-time percentiles over the window. Comparing them against `solr.queries.handler_ms` helps localize a latency tail, but it's a pointer, not proof: the two cover different traffic and periods, and these include failures (see Step 5 of the decision tree). |
-| `solr_round_trip_ms` | The same six values for the part of each lookup spent on the Solr request. Matches the "waiting for Solr" figure in the log line. A `p99` or `max` well above `solr.queries.handler_ms`' points at a tail in the connection, network or transfer rather than in Solr. |
+| `solr_round_trip_ms` | The same six values for the part of each lookup spent on the Solr request. Matches the "for the Solr round trip" figure in the log line. A `p99` or `max` well above `solr.queries.handler_ms`' points at a tail in the connection, network or transfer rather than in Solr. |
 | `requests` / `window_size` | How many queries are currently in the rolling window, and its capacity (`RECENT_TIMES_COUNT`, default 50000). Unlike `solr.queries.requests`, `requests` is windowed, not cumulative, so the two can't be compared. |
 | `errors` / `timeouts` / `cancelled` | Queries in the window that failed: `timeouts` hit `SOLR_TIMEOUT_SECONDS`, `cancelled` were abandoned while waiting on Solr (a server shutdown, say), and `errors` are the rest (Solr returned an error or couldn't be reached). They are disjoint, so their sum is every failure. Unlike `solr.queries.errors`/`timeouts` these are windowed, not cumulative, and they include failures Solr never saw (it was unreachable, or NameRes gave up waiting). Failed queries are counted in the timings above, so a run of timeouts shows up in `lookup_ms.p99` and `max` too. |
 
@@ -124,10 +124,13 @@ with one `Bulk lookup query for N strings` line giving the total time. For examp
 
 ```
 INFO: Lookup query to Solr for "diabetes" (autocomplete=False, ... only_taxa=None):
-      took 123.45ms (with 100.12ms waiting for Solr)
+      took 123.45ms (with 100.12ms for the Solr round trip)
 
-WARNING: SLOW QUERY: Lookup query to Solr for "..." ... took 850.12ms (with 840.00ms waiting for Solr)
+WARNING: SLOW QUERY: Lookup query to Solr for "..." ... took 850.12ms (with 840.00ms for the Solr round trip)
 ```
+
+NameRes v1.7.1 and earlier wrote `(with 100.12ms waiting for Solr)` for the same figure, so
+anything parsing these lines should accept both.
 
 A lookup that fails instead logs at WARNING with the outcome (`timeout`, `cancelled` or `error`)
 and the exception type, before the exception is re-raised (and, unless it was cancelled, becomes
@@ -138,8 +141,10 @@ WARNING: FAILED QUERY (timeout: ReadTimeout): Lookup query to Solr for "..." ...
 ```
 
 Key interpretation:
-- **"waiting for Solr" ≈ total** → the bottleneck is inside Solr (JVM, index, caches).
-- **"waiting for Solr" is small, total is high** → the bottleneck is Python result processing
+- **Solr round trip ≈ total** → the time is in the Solr request. That is either Solr itself
+  (JVM, index, caches) or the connection, network and transfer in between; compare
+  `solr.queries.handler_ms` in `/status?full=true` to tell them apart.
+- **Solr round trip is small, total is high** → the bottleneck is Python result processing
   (large result sets being deserialized or filtered).
 - Set `LOGLEVEL=DEBUG` to also log the full Solr request and response JSON for every query.
 

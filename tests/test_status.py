@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import math
+import re
 
 import httpx
 import pytest
@@ -569,3 +570,19 @@ def test_shared_solr_client_is_reused_and_closed_on_shutdown(monkeypatch):
         assert not handed_out[0].is_closed
     assert len(handed_out) == 3 and all(c is handed_out[0] for c in handed_out)
     assert handed_out[0].is_closed
+
+
+# The lookup log line is parsed downstream (TranslatorSRI/babel-validation's NameRes log
+# analysis), so its shape is an interface. Change this pattern only with that parser.
+LOOKUP_LOG_LINE = re.compile(
+    r'^Lookup query to Solr for "alzheimer" \(autocomplete=False, .*\): '
+    r'took (?P<took>[\d.]+)ms \(with (?P<solr>[\d.]+)ms for the Solr round trip\)$')
+
+
+def test_lookup_log_line_format(caplog):
+    client = TestClient(app)
+    with caplog.at_level(logging.INFO, logger="api.server"):
+        client.get("/lookup", params={'string': 'alzheimer'})
+    matches = [LOOKUP_LOG_LINE.match(r.getMessage()) for r in caplog.records]
+    match = next(m for m in matches if m)
+    assert float(match['solr']) <= float(match['took'])

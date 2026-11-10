@@ -284,7 +284,7 @@ class RecentLookups:
             # The part of lookup_ms spent on the Solr request, as NameRes sees it: setting
             # up the HTTP client and connection, Solr's handling (solr.queries.handler_ms),
             # the response's transfer, and decoding its JSON. The lookup log line's
-            # "waiting for Solr" figure.
+            # "for the Solr round trip" figure.
             'solr_round_trip_ms': {'mean': _mean_ms(self._solr_ns), **order_stats['solr_round_trip']},
         }
 
@@ -1262,8 +1262,11 @@ async def lookup(string: str,
     time_taken_ms_solr = (time_solr_end - time_solr_start)/1_000_000
     if not bulk:
         recent_lookups.record(time_end - time_start, time_solr_end - time_solr_start)
+    # Parsed downstream (TranslatorSRI/babel-validation's NameRes log analysis), so change the
+    # wording only together with its parser, which must keep accepting the old text:
+    # v1.7.1 and earlier logged "(with Yms waiting for Solr)". tests/test_status.py pins it.
     log_msg = (f"{log_msg_prefix}: "
-               f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms waiting for Solr)")
+               f"took {time_taken_ms:.2f}ms (with {time_taken_ms_solr:.2f}ms for the Solr round trip)")
     if time_taken_ms > SLOW_QUERY_THRESHOLD_MS and not bulk:
         logger.warning("SLOW QUERY: " + log_msg)
     else:
