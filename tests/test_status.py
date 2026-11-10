@@ -363,6 +363,27 @@ def test_failed_lookup_is_recorded(monkeypatch, caplog, failure, outcome):
                for r in caplog.records)
 
 
+def test_lookup_failing_after_solr_answered_is_recorded(monkeypatch, caplog):
+    """A lookup that fails while building its results, after Solr has answered, is a 500 to
+    its caller like any other failure, so it must count in recent_queries.errors too."""
+    async def unexpected_doc_post(self, url, **kwargs):
+        # A document with no `id` can't be matched up with its highlighting.
+        return httpx.Response(200, json={'response': {'docs': [{'curie': 'MONDO:0004975'}]}})
+    monkeypatch.setattr(httpx.AsyncClient, "post", unexpected_doc_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get())
+    client = TestClient(app, raise_server_exceptions=False)
+
+    before = client.get("/status").json()['recent_queries']
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        assert client.get("/lookup", params={'string': 'alzheimer'}).status_code == 500
+    after = client.get("/status").json()['recent_queries']
+
+    assert after['errors'] == before['errors'] + 1
+    assert after['requests'] == min(before['requests'] + 1, after['window_size'])
+    assert any(r.levelno == logging.WARNING and "FAILED QUERY (error: KeyError)" in r.getMessage()
+               for r in caplog.records)
+
+
 def test_status_tolerates_unexpected_metric_values(monkeypatch):
     """An unexpected value costs only its own field, not every block: a non-numeric heap
     maximum once raised a TypeError that threw away the query, cache and OS figures too."""

@@ -226,7 +226,7 @@ class RecentLookups:
             # Lookups in the window that failed, split by how: `timeouts` hit
             # SOLR_TIMEOUT_SECONDS, `cancelled` were abandoned while waiting on Solr (a
             # server shutdown, say), and `errors` are everything else (Solr returned an
-            # error, or couldn't be reached). Disjoint, so their sum is every failure.
+            # error or couldn't be reached, or its answer couldn't be made into results). Disjoint, so their sum is every failure.
             # Their times are in the figures below: a failed lookup kept its caller
             # waiting too. Not the same as solr.queries.timeouts, which counts only
             # requests Solr itself cut short.
@@ -1121,6 +1121,7 @@ async def lookup(string: str,
                       f"(autocomplete={autocomplete}, highlighting={highlighting}, offset={offset}, limit={limit}, biolink_types={biolink_types}, only_prefixes={only_prefixes}, exclude_prefixes={exclude_prefixes}, only_taxa={only_taxa}, exact={exact})")
 
     time_solr_start = time.perf_counter_ns()
+    time_solr_end = None    # Set once Solr has answered; see the except below.
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
     try:
         async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
@@ -1129,6 +1130,90 @@ async def lookup(string: str,
             logger.error("Solr REST error: %s", response.text)
             response.raise_for_status()
         response = response.json()
+        time_solr_end = time.perf_counter_ns()
+
+        # Do we have any debug.explain information?
+        explain_info = {}
+        if 'debug' in response and 'explain' in response['debug']:
+            explain_info = response['debug']['explain']
+
+        logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
+
+        # Associate highlighting information with search results.
+        highlighting_response = response.get("highlighting", {})
+
+        outputs = []
+        for doc in response['response']['docs']:
+            preferred_matches = []
+            synonym_matches = []
+
+            if exact and highlighting:
+                # Solr did not highlight anything for us: exact mode matches with a filter query
+                # against fields that are not stored, so there is no scored query and nothing for the
+                # highlighter to mark up. Synthesize the same shape from the documents instead, so that
+                # a caller reading `highlighting` does not have to care which mode produced it.
+                #
+                # Every match in exact mode is a whole-value match, so the "highlighted" form of a
+                # matching name is simply the entire name wrapped in the same tags Solr would have
+                # used. Escape it first, since we ask Solr for hl.encoder=html in the default path.
+                def mark(value: str) -> str:
+                    return f"<strong>{html.escape(value)}</strong>"
+
+                if exact in {ExactMatchMode.label, ExactMatchMode.any}:
+                    preferred_name = doc.get("preferred_name", "")
+                    if preferred_name.lower() == string_lc:
+                        preferred_matches.append(mark(preferred_name))
+
+                if exact in {ExactMatchMode.synonyms, ExactMatchMode.any}:
+                    synonym_matches.extend(
+                        mark(name) for name in doc.get("names", []) if name.lower() == string_lc
+                    )
+
+            elif doc['id'] in highlighting_response:
+                matches = highlighting_response[doc['id']]
+
+                # We order exactish matches before token matches.
+                if 'preferred_name_exactish' in matches:
+                    preferred_matches.extend(matches['preferred_name_exactish'])
+                if 'preferred_name' in matches:
+                    preferred_matches.extend(matches['preferred_name'])
+
+                # Solr sometimes returns duplicates or a blank string here?
+                preferred_matches = list(filter(lambda s: s, set(preferred_matches)))
+
+                # We order exactish matches before token matches.
+                if 'names_exactish' in matches:
+                    synonym_matches.extend(matches['names_exactish'])
+                if 'names' in matches:
+                    synonym_matches.extend(matches['names'])
+
+                # Solr sometimes returns duplicates or a blank string here?
+                synonym_matches = list(filter(lambda s: s, set(synonym_matches)))
+
+            # Prepare debugging and explain information for this request.
+            debug_for_this_request = response.get('debug', None)
+            explain_for_this_doc = None
+            if debug in {DebugOptions.results, DebugOptions.all}:
+                if doc['id'] in explain_info:
+                    explain_for_this_doc = explain_info[doc['id']]
+
+                    # If we have explain information, we don't need to also include it in the debugging information.
+                    debug_for_this_request['explain'] = {"_comment": "Removed to avoid data duplication"}
+
+
+            outputs.append(LookupResult(curie=doc.get("curie", ""),
+                               label=doc.get("preferred_name", ""),
+                               highlighting={
+                                   'labels': preferred_matches,
+                                   'synonyms': synonym_matches,
+                               } if highlighting else {},
+                               synonyms=doc.get("names", []),
+                               score=doc.get("score", ""),
+                               taxa=doc.get("taxa", []),
+                               clique_identifier_count=doc.get("clique_identifier_count", 0),
+                               types=[f"biolink:{d}" for d in doc.get("types", [])],
+                               explain=explain_for_this_doc,
+                               debug=debug_for_this_request))
     except BaseException as e:
         # A failed lookup still has to be timed. The ones that hit SOLR_TIMEOUT_SECONDS are the
         # slowest requests of all, so recording times only on success would leave them out of
@@ -1136,6 +1221,12 @@ async def lookup(string: str,
         # Solr is struggling. BaseException rather than Exception so that a lookup cancelled
         # while it waits on Solr (asyncio.CancelledError) is timed too: those are slow ones
         # as well. It is re-raised below, so nothing is swallowed.
+        #
+        # The try covers building the results as well as the Solr request, so that a lookup
+        # that fails on a document it can't turn into a LookupResult is counted and logged
+        # too: its caller gets a 500 all the same, and /status mustn't report no failures
+        # while /lookup is returning them. Such a failure's Solr round trip ended when Solr
+        # answered, not when the lookup failed.
         time_failed = time.perf_counter_ns()
         time_taken_ms = (time_failed - time_start)/1_000_000
         if isinstance(e, httpx.TimeoutException):
@@ -1145,94 +1236,11 @@ async def lookup(string: str,
         else:
             outcome = 'error'
         if not bulk:
-            recent_lookups.record(time_failed - time_start, time_failed - time_solr_start, outcome)
+            solr_end = time_solr_end if time_solr_end is not None else time_failed
+            recent_lookups.record(time_failed - time_start, solr_end - time_solr_start, outcome)
         logger.warning(f"FAILED QUERY ({outcome}: {type(e).__name__}): {log_msg_prefix}: "
                        f"failed after {time_taken_ms:.2f}ms")
         raise
-
-    # Do we have any debug.explain information?
-    explain_info = {}
-    if 'debug' in response and 'explain' in response['debug']:
-        explain_info = response['debug']['explain']
-
-    time_solr_end = time.perf_counter_ns()
-    logger.debug(f"Solr response: {json.dumps(response, indent=2)}")
-
-    # Associate highlighting information with search results.
-    highlighting_response = response.get("highlighting", {})
-
-    outputs = []
-    for doc in response['response']['docs']:
-        preferred_matches = []
-        synonym_matches = []
-
-        if exact and highlighting:
-            # Solr did not highlight anything for us: exact mode matches with a filter query
-            # against fields that are not stored, so there is no scored query and nothing for the
-            # highlighter to mark up. Synthesize the same shape from the documents instead, so that
-            # a caller reading `highlighting` does not have to care which mode produced it.
-            #
-            # Every match in exact mode is a whole-value match, so the "highlighted" form of a
-            # matching name is simply the entire name wrapped in the same tags Solr would have
-            # used. Escape it first, since we ask Solr for hl.encoder=html in the default path.
-            def mark(value: str) -> str:
-                return f"<strong>{html.escape(value)}</strong>"
-
-            if exact in {ExactMatchMode.label, ExactMatchMode.any}:
-                preferred_name = doc.get("preferred_name", "")
-                if preferred_name.lower() == string_lc:
-                    preferred_matches.append(mark(preferred_name))
-
-            if exact in {ExactMatchMode.synonyms, ExactMatchMode.any}:
-                synonym_matches.extend(
-                    mark(name) for name in doc.get("names", []) if name.lower() == string_lc
-                )
-
-        elif doc['id'] in highlighting_response:
-            matches = highlighting_response[doc['id']]
-
-            # We order exactish matches before token matches.
-            if 'preferred_name_exactish' in matches:
-                preferred_matches.extend(matches['preferred_name_exactish'])
-            if 'preferred_name' in matches:
-                preferred_matches.extend(matches['preferred_name'])
-
-            # Solr sometimes returns duplicates or a blank string here?
-            preferred_matches = list(filter(lambda s: s, set(preferred_matches)))
-
-            # We order exactish matches before token matches.
-            if 'names_exactish' in matches:
-                synonym_matches.extend(matches['names_exactish'])
-            if 'names' in matches:
-                synonym_matches.extend(matches['names'])
-
-            # Solr sometimes returns duplicates or a blank string here?
-            synonym_matches = list(filter(lambda s: s, set(synonym_matches)))
-
-        # Prepare debugging and explain information for this request.
-        debug_for_this_request = response.get('debug', None)
-        explain_for_this_doc = None
-        if debug in {DebugOptions.results, DebugOptions.all}:
-            if doc['id'] in explain_info:
-                explain_for_this_doc = explain_info[doc['id']]
-
-                # If we have explain information, we don't need to also include it in the debugging information.
-                debug_for_this_request['explain'] = {"_comment": "Removed to avoid data duplication"}
-
-
-        outputs.append(LookupResult(curie=doc.get("curie", ""),
-                           label=doc.get("preferred_name", ""),
-                           highlighting={
-                               'labels': preferred_matches,
-                               'synonyms': synonym_matches,
-                           } if highlighting else {},
-                           synonyms=doc.get("names", []),
-                           score=doc.get("score", ""),
-                           taxa=doc.get("taxa", []),
-                           clique_identifier_count=doc.get("clique_identifier_count", 0),
-                           types=[f"biolink:{d}" for d in doc.get("types", [])],
-                           explain=explain_for_this_doc,
-                           debug=debug_for_this_request))
 
     time_end = time.perf_counter_ns()
     time_taken_ms = (time_end - time_start)/1_000_000
