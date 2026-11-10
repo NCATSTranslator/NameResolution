@@ -479,6 +479,17 @@ def test_recent_lookups_percentiles_are_cached(monkeypatch):
     assert window.summary()['p50_ms'] == 50.5
 
 
+def test_recent_lookups_percentiles_stay_within_observed_times():
+    """A small window mustn't report a percentile slower than any lookup it holds: the
+    default 'exclusive' method gave 1 ms and 100 ms lookups a p99 of 196 ms."""
+    from api.server import RecentLookups
+    window = RecentLookups(100)
+    window.record(1_000_000, 0)
+    window.record(100_000_000, 0)
+    summary = window.summary()
+    assert 1.0 <= summary['p50_ms'] <= summary['p95_ms'] <= summary['p99_ms'] <= 100.0
+
+
 def test_recent_lookups_window_of_zero_keeps_nothing():
     from api.server import RecentLookups
     window = RecentLookups(0)

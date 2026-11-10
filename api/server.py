@@ -176,7 +176,11 @@ class RecentLookups:
             self._percentiles[0] is None or now - self._percentiles_at >= PERCENTILE_CACHE_SECONDS)
         if stale:
             if len(self._entries) >= 2:
-                qs = statistics.quantiles([entry[0] for entry in self._entries], n=100)
+                # 'inclusive' keeps every percentile within the observed times. The default
+                # ('exclusive') extrapolates past them in a small window: 1 ms and 100 ms
+                # lookups gave a p99 of 196 ms, a delay no caller had.
+                qs = statistics.quantiles([entry[0] for entry in self._entries], n=100,
+                                          method='inclusive')
                 self._percentiles = tuple(round(qs[i] / 1_000_000, 2) for i in (49, 94, 98))
             else:
                 self._percentiles = (None, None, None)
