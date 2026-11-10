@@ -194,7 +194,11 @@ Solr seems slow or the service is unresponsive
 │    │    └─ Evictions low but heap still high → data/fieldCache is large.
 │    │         Fix: raise -Xmx (SOLR_JAVA_MEM) or add RAM to the host.
 │    │
-│    └─ < 50 → not a memory issue → continue
+│    └─ < 50 → no HEAP pressure. That doesn't rule out PAGE-CACHE pressure: Solr reads
+│         its index through mmap, so the RAM it needs is outside the heap (#265).
+│         Check: total_physical_mem_mb − heap_max_mb against the index `size`; if it is
+│         far smaller, index reads go to disk. Confirm with disk I/O on the Solr host.
+│         Fix: shrink the heap or add RAM to the pod. Otherwise → continue
 │
 ├─ Step 4: Check solr.jvm.cpu_load (and solr.os.system_cpu_load)
 │    │
@@ -205,7 +209,8 @@ Solr seems slow or the service is unresponsive
 │    │    │    Fix: cache common filter combinations; avoid leading wildcards
 │    │    └─ Even load across all queries → scale horizontally (add Solr replicas)
 │    │
-│    └─ Low CPU and low memory but slow queries → likely JVM GC pauses → continue
+│    └─ Low CPU, no heap or page-cache pressure, but slow queries → check for JVM GC
+│         pauses → continue
 │
 └─ Step 5: Compare the two p99s to locate the tail, then check jvm.gc_time_ms
      │
