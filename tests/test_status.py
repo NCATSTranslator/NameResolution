@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import math
+import re
 
 import httpx
 import pytest
@@ -533,3 +534,19 @@ def test_diagnostic_setting_reads_valid_values(monkeypatch):
     assert diagnostic_setting("NAMERES_TEST_SETTING", 7, int) == 0
     monkeypatch.setenv("NAMERES_TEST_SETTING", "250.5")
     assert math.isclose(diagnostic_setting("NAMERES_TEST_SETTING", 7.0, float), 250.5)
+
+
+# The lookup log line is parsed downstream (TranslatorSRI/babel-validation's NameRes log
+# analysis), so its shape is an interface. Change this pattern only with that parser.
+LOOKUP_LOG_LINE = re.compile(
+    r'^Lookup query to Solr for "alzheimer" \(autocomplete=False, .*\): '
+    r'took (?P<took>[\d.]+)ms \(with (?P<solr>[\d.]+)ms for the Solr round trip\)$')
+
+
+def test_lookup_log_line_format(caplog):
+    client = TestClient(app)
+    with caplog.at_level(logging.INFO, logger="api.server"):
+        client.get("/lookup", params={'string': 'alzheimer'})
+    matches = [LOOKUP_LOG_LINE.match(r.getMessage()) for r in caplog.records]
+    match = next(m for m in matches if m)
+    assert float(match['solr']) <= float(match['took'])
