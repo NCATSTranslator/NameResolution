@@ -132,8 +132,8 @@ class RecentLookups:
     added and evicted, rather than a pass over the window per request. Times are kept as
     integer nanoseconds, so that those totals don't drift however many entries pass
     through. The min, max and percentiles need a sort of the whole window (a few ms at
-    50000 entries, on the event loop), so summary() reuses the last sort's for up to
-    PERCENTILE_CACHE_SECONDS.
+    50000 entries, on the event loop, for each of the two series), so summary() reuses the
+    last ones for up to PERCENTILE_CACHE_SECONDS.
 
     Everything here runs on the event loop with no await, so it needs no lock.
     """
@@ -148,11 +148,28 @@ class RecentLookups:
         self._outcomes = Counter()
         # Lookups ever recorded: tells summary() whether its cached order statistics are stale.
         self._recorded = 0
-        self._order_stats = self._NO_ORDER_STATS
+        # Per series: 'lookup' (entry[0]) and 'solr_round_trip' (entry[1]).
+        self._order_stats = {series: self._NO_ORDER_STATS for series in self._SERIES}
         self._order_stats_recorded = 0
         self._order_stats_at = 0.0
 
     _NO_ORDER_STATS = {'min': None, 'max': None, 'p50': None, 'p95': None, 'p99': None}
+    # Which element of an entry each timed series is.
+    _SERIES = {'lookup': 0, 'solr_round_trip': 1}
+
+    @classmethod
+    def _order_stats_of(cls, times_ns: List[int]) -> Dict:
+        """ min, max, p50, p95 and p99 of `times_ns` (sorted), in ms. """
+        stats = dict(cls._NO_ORDER_STATS)
+        if times_ns:
+            stats['min'], stats['max'] = times_ns[0], times_ns[-1]
+        if len(times_ns) >= 2:
+            # 'inclusive' keeps every percentile within the observed times. The default
+            # ('exclusive') extrapolates past them in a small window: 1 ms and 100 ms
+            # lookups gave a p99 of 196 ms, a delay no caller had.
+            qs = statistics.quantiles(times_ns, n=100, method='inclusive')
+            stats['p50'], stats['p95'], stats['p99'] = qs[49], qs[94], qs[98]
+        return {k: None if v is None else round(v / 1_000_000, 2) for k, v in stats.items()}
 
     def record(self, total_ns: int, solr_ns: int, outcome: str = 'ok'):
         """ Add one lookup, evicting the oldest if the window is full. `outcome` is how it
@@ -171,25 +188,19 @@ class RecentLookups:
         self._recorded += 1
 
     def _current_order_stats(self) -> Dict:
-        """ min, max, p50, p95 and p99 of the lookup times, in ms. Recomputed only if lookups
+        """ The order statistics of each series, keyed as _SERIES. Recomputed only if lookups
         have arrived since the last computation and it is more than PERCENTILE_CACHE_SECONDS
-        old -- or it was made before there were the two lookups that percentiles need. """
+        old -- or it was made before there were the two lookups that percentiles need. One
+        sort per series, so two sorts of the window per recomputation. """
         now = time.monotonic()
         stale = self._recorded != self._order_stats_recorded and (
-            self._order_stats['p50'] is None or now - self._order_stats_at >= PERCENTILE_CACHE_SECONDS)
+            self._order_stats['lookup']['p50'] is None
+            or now - self._order_stats_at >= PERCENTILE_CACHE_SECONDS)
         if stale:
-            times = sorted(entry[0] for entry in self._entries)
-            stats = dict(self._NO_ORDER_STATS)
-            if times:
-                stats['min'], stats['max'] = times[0], times[-1]
-            if len(times) >= 2:
-                # 'inclusive' keeps every percentile within the observed times. The default
-                # ('exclusive') extrapolates past them in a small window: 1 ms and 100 ms
-                # lookups gave a p99 of 196 ms, a delay no caller had.
-                qs = statistics.quantiles(times, n=100, method='inclusive')
-                stats['p50'], stats['p95'], stats['p99'] = qs[49], qs[94], qs[98]
-            self._order_stats = {k: None if v is None else round(v / 1_000_000, 2)
-                                 for k, v in stats.items()}
+            self._order_stats = {
+                series: self._order_stats_of(sorted(entry[i] for entry in self._entries))
+                for series, i in self._SERIES.items()
+            }
             self._order_stats_recorded = self._recorded
             self._order_stats_at = now
         return self._order_stats
@@ -197,6 +208,8 @@ class RecentLookups:
     def summary(self) -> Dict:
         """ The recent_queries block of /status. """
         count = len(self._entries)
+
+        order_stats = self._current_order_stats()
 
         def _mean_ms(total_ns):
             return round(total_ns / count / 1_000_000, 2) if count else None
@@ -222,12 +235,12 @@ class RecentLookups:
             'cancelled': self._outcomes['cancelled'],
             # The whole of lookup(): Solr round trip plus building the results. It doesn't
             # include FastAPI's handling of the request or the network to the caller.
-            'lookup_ms': {'mean': _mean_ms(self._total_ns), **self._current_order_stats()},
+            'lookup_ms': {'mean': _mean_ms(self._total_ns), **order_stats['lookup']},
             # The part of lookup_ms spent on the Solr request, as NameRes sees it: setting
             # up the HTTP client and connection, Solr's handling (solr.queries.handler_ms),
             # the response's transfer, and decoding its JSON. The lookup log line's
             # "waiting for Solr" figure.
-            'solr_round_trip_ms': {'mean': _mean_ms(self._solr_ns)},
+            'solr_round_trip_ms': {'mean': _mean_ms(self._solr_ns), **order_stats['solr_round_trip']},
         }
 
 
