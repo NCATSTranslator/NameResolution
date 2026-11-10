@@ -88,9 +88,10 @@ taxon (Solr `fq`), so `filterCache` usually matters most.
 | `evictions` | Rising = the cache is too small for the working set (a symptom of memory pressure). |
 | `size` / `lookups` / `hits` | Current entry count, and cumulative lookups/hits. |
 
-Cache sizes are configured in Solr's `solrconfig.xml`. If evictions are high, increase
-`<maxSize>` for the affected cache — or check whether requests use many distinct filter
-combinations that defeat caching.
+Cache sizes are configured in `data-loading/configsets/name_lookup/conf/solrconfig.xml`, and
+the two caches are bounded differently. If evictions are high, raise `filterCache`'s `size` (an
+entry count), or `queryResultCache`'s `maxRamMB` (a RAM bound; `size` is ignored once `maxRamMB` is
+set). Or check whether requests use many distinct filter combinations that defeat caching.
 
 ---
 
@@ -189,7 +190,7 @@ Solr seems slow or the service is unresponsive
 │    │
 │    ├─ > 80 → MEMORY PRESSURE
 │    │    ├─ solr.cache.filterCache.evictions rising → cache too small for the
-│    │    │    working set. Fix: raise <maxSize> for filterCache in solrconfig.xml.
+│    │    │    working set. Fix: raise filterCache's `size` in solrconfig.xml.
 │    │    └─ Evictions low but heap still high → data/fieldCache is large.
 │    │         Fix: raise -Xmx (SOLR_JAVA_MEM) or add RAM to the host.
 │    │
