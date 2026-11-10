@@ -391,6 +391,21 @@ def test_status_tolerates_unexpected_metric_values(monkeypatch):
     assert solr['os']['available_processors'] == 4
 
 
+@pytest.mark.parametrize("heap_max", [-1, 0])
+def test_status_reports_undefined_heap_max_as_null(monkeypatch, heap_max):
+    """The JVM reports a heap with no defined maximum as -1, which is unknown: it must not
+    come out as a negative heap_max_mb or heap_used_pct (or, at 0, a ZeroDivisionError)."""
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_solr_get(
+        lambda request: httpx.Response(200, request=request, json={'metrics': {
+            'solr.core.name_lookup': {},
+            'solr.jvm': {'memory.heap.used': 1_048_576, 'memory.heap.max': heap_max},
+        }})))
+    client = TestClient(app)
+    jvm = client.get("/status", params={'full': 'true'}).json()['solr']['jvm']
+    assert jvm['heap_used_mb'] == 1.0
+    assert jvm['heap_max_mb'] is None and jvm['heap_used_pct'] is None
+
+
 # What a SolrCloud core looks like in core STATUS (as Solr 9.10 in cloud mode reports it):
 # its metrics registry is solr.core.<collection>.<shard>.<replica>, with the replica taken
 # from the core name, not the cloud descriptor's `replica`.

@@ -331,8 +331,10 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
             return {'metrics_error': f"Solr's /admin/metrics returned HTTP {metrics_resp.status_code}."}
         all_metrics = _dict(metrics_resp.json().get('metrics'))
 
+        # A memory size of -1 is the JVM's 'undefined' (MemoryUsage.getMax() with no
+        # maximum set), so a negative size is unknown, not a size.
         def _mb(n):
-            return round(n / 1_048_576, 1) if _number(n) is not None else None
+            return round(n / 1_048_576, 1) if _number(n) is not None and n >= 0 else None
 
         metrics = {}
 
@@ -388,6 +390,8 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
         # nested 'memory.heap' map; see the Gotchas in CLAUDE.md.
         heap_used = _number(jvm.get('memory.heap.used'))
         heap_max = _number(jvm.get('memory.heap.max'))
+        if heap_max is not None and heap_max <= 0:
+            heap_max = None    # -1: no maximum defined, so no percentage of it either.
 
         # GC pause totals across whichever collectors are configured (G1, etc.).
         # High gc_time_ms relative to uptime points at heap pressure — a heap-sizing signal.
@@ -417,7 +421,7 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
         metrics['jvm'] = {
             'heap_used_mb': _mb(heap_used),
             'heap_max_mb': _mb(heap_max),
-            'heap_used_pct': round(heap_used / heap_max * 100, 1) if heap_used is not None and heap_max else None,
+            'heap_used_pct': round(heap_used / heap_max * 100, 1) if heap_used is not None and heap_max is not None else None,
             'cpu_load': _number(jvm.get('os.processCpuLoad')),
             'gc_count': _gc_total('.count'),
             'gc_time_ms': _gc_total('.time'),
