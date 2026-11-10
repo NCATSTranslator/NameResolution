@@ -537,7 +537,8 @@ def test_diagnostic_setting_reads_valid_values(monkeypatch):
 
 
 # The lookup log line is parsed downstream (TranslatorSRI/babel-validation's NameRes log
-# analysis), so its shape is an interface. Change this pattern only with that parser.
+# analysis, its PR #107: LOOKUP_LINE_RE in log-analysis/nameres/analyze_nameres_logs.py), so
+# its shape is an interface. Change this pattern only with that parser.
 LOOKUP_LOG_LINE = re.compile(
     r'^Lookup query to Solr for "alzheimer" \(autocomplete=False, .*\): '
     r'took (?P<took>[\d.]+)ms \(with (?P<solr>[\d.]+)ms for the Solr round trip\)$')
