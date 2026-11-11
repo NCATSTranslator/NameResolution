@@ -9,7 +9,6 @@ import json
 import logging
 import statistics
 import warnings
-import weakref
 import time
 import os
 import re
@@ -79,45 +78,96 @@ class Config:
 config = Config()
 
 
-# One httpx client per event loop, shared by every Solr request, so that requests reuse
-# kept-alive connections. A new client per query (as lookup() used to make) builds an SSL
-# context and opens a TCP connection each time: on a local Solr that took a 1 ms query to about
-# 8 ms, most of what /status reported as solr_round_trip_ms.
+# One httpx client shared by every Solr lookup, so that lookups reuse kept-alive
+# connections. A new client per query (as lookup() used to make) builds an SSL context and
+# opens a TCP connection each time: on a local Solr that took a 1 ms query to about 8 ms,
+# most of what /status reported as solr_round_trip_ms.
 #
-# Keyed by loop because an httpx client's connections belong to the loop that opened them.
-# Uvicorn serves everything from one loop, so in production this is a single client; the
-# key matters for TestClient and asyncio.run(), which start a fresh loop per call, and
-# would otherwise be handed connections from a loop that has gone. Weak keys let a dead
-# loop's client go with it.
-_solr_clients: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient]" = \
-    weakref.WeakKeyDictionary()
+# The app's lifespan creates it and closes it, and it is only handed out on the event loop
+# that lifespan ran on, because an httpx client's connections belong to the loop that
+# opened them. Uvicorn runs the lifespan and serves every request on one loop, so in
+# production every lookup shares it. Anything else -- a TestClient used without `with`,
+# which starts a fresh loop per request, or a script calling lookup() through
+# asyncio.run() -- gets a client of its own that is closed when the request is done.
+#
+# An earlier version kept one client per loop in a WeakKeyDictionary, expecting a finished
+# loop's client to be collected with it. It never was: a kept-alive connection's transport
+# refers back to its loop, so the dictionary kept every finished loop, its client and an
+# open socket to Solr alive, and nothing could close them from another loop.
+_shared_solr_client: Optional[tuple[asyncio.AbstractEventLoop, httpx.AsyncClient]] = None
 
 
-def solr_client() -> httpx.AsyncClient:
-    """ The shared Solr client for the running event loop, created on first use. """
-    loop = asyncio.get_running_loop()
-    client = _solr_clients.get(loop)
-    if client is None or client.is_closed:
-        client = httpx.AsyncClient(
-            timeout=config.solr_timeout,
-            # No cap on connections, as when each query had its own client: the in-flight
-            # bound is SOLR_MAX_CONCURRENT_LOOKUPS per /bulk-lookup request, and a pool cap
-            # below that would make queries wait for a connection -- inside
-            # SOLR_TIMEOUT_SECONDS, so a busy pool would show up as Solr timeouts. Keep up
-            # to that many idle connections alive for reuse.
-            limits=httpx.Limits(max_connections=None,
-                                max_keepalive_connections=config.solr_max_concurrent_lookups),
-        )
-        _solr_clients[loop] = client
-    return client
+def new_solr_client() -> httpx.AsyncClient:
+    """ A fresh httpx client for Solr requests; the caller must close it. """
+    return httpx.AsyncClient(
+        timeout=config.solr_timeout,
+        # No cap on connections, as when each query had its own client: the in-flight bound
+        # is SOLR_MAX_CONCURRENT_LOOKUPS per /bulk-lookup request, and a pool cap below that
+        # would make queries wait for a connection -- inside SOLR_TIMEOUT_SECONDS, so a busy
+        # pool would show up as Solr timeouts. Keep up to that many idle connections alive
+        # for reuse. This is read once, when the client is made; the timeout is not, since
+        # solr_request() passes it with every request.
+        #
+        # httpx's default keepalive_expiry closes a connection after 5 s idle, well inside
+        # Jetty's idle timeout, so Solr rarely closes one we are about to reuse.
+        limits=httpx.Limits(max_connections=None,
+                            max_keepalive_connections=config.solr_max_concurrent_lookups),
+    )
+
+
+@asynccontextmanager
+async def solr_client():
+    """
+    The Solr client to use for one request: the shared one when running on the loop the
+    app's lifespan opened it on, otherwise a fresh client closed on the way out.
+    """
+    shared = _shared_solr_client
+    if shared is not None and shared[0] is asyncio.get_running_loop() and not shared[1].is_closed:
+        yield shared[1]
+    else:
+        async with new_solr_client() as client:
+            yield client
+
+
+# The errors that mean a connection broke under a request rather than that Solr answered
+# badly or slowly: Solr closed it as we sent (RemoteProtocolError, "Server disconnected
+# without sending a response"), or reset it (ReadError, WriteError). With kept-alive
+# connections, a Solr that restarted or a pod that moved can leave one of these in the
+# pool. httpcore already drops idle connections the server closed cleanly, so this is
+# the race where the close lands while the request is in flight. httpx doesn't retry it
+# for a POST, so solr_request() does, once; every request NameRes sends Solr is a read.
+# Timeouts are not retried: they cost SOLR_TIMEOUT_SECONDS each, and a slow Solr is not
+# helped by a second query.
+_RETRYABLE_SOLR_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)
+
+
+async def solr_request(client: httpx.AsyncClient, method: str, url: str, **kwargs) -> httpx.Response:
+    """
+    Send a request to Solr through `client`, retrying once if the connection broke under it.
+
+    `method` is "get" or "post", called by name so that tests patching
+    httpx.AsyncClient.get/post still see the request. The timeout is read from `config`
+    on every call rather than fixed when the client was made.
+    """
+    send = getattr(client, method)
+    try:
+        return await send(url, timeout=config.solr_timeout, **kwargs)
+    except _RETRYABLE_SOLR_ERRORS as e:
+        logger.info("Solr connection broke during a request to %s (%s: %s); retrying once.",
+                    url, type(e).__name__, e)
+        return await send(url, timeout=config.solr_timeout, **kwargs)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """ Close the shared Solr client when the server shuts down. """
-    yield
-    client = _solr_clients.pop(asyncio.get_running_loop(), None)
-    if client is not None:
+    """ Open the shared Solr client for the server's lifetime, and close it on shutdown. """
+    global _shared_solr_client
+    client = new_solr_client()
+    _shared_solr_client = (asyncio.get_running_loop(), client)
+    try:
+        yield
+    finally:
+        _shared_solr_client = None
         await client.aclose()
 
 
@@ -335,7 +385,8 @@ def _dict(value) -> Dict:
     return value if isinstance(value, dict) else {}
 
 
-async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = None) -> Dict:
+async def fetch_solr_metrics(client: httpx.AsyncClient, core_name: Optional[str],
+                             core: Optional[Dict] = None) -> Dict:
     """
     Read Solr's own health metrics from /admin/metrics, for /status?full=true.
 
@@ -353,9 +404,8 @@ async def fetch_solr_metrics(core_name: Optional[str], core: Optional[Dict] = No
     """
     metrics_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/metrics"
     try:
-        client = solr_client()
         # A single call with group=core&group=jvm retrieves both in one round-trip.
-        metrics_resp = await client.get(metrics_url, params=[
+        metrics_resp = await solr_request(client, "get", metrics_url, params=[
             ('group', 'core'),
             ('group', 'jvm'),
             ('prefix', 'QUERY./select'),
@@ -510,15 +560,35 @@ async def status_get(
 async def status(full: bool = False) -> Dict:
     """ Return a dictionary containing status and count information for the underlying Solr instance. """
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/admin/cores"
-    client = solr_client()
-    response = await client.get(query_url, params={
-        'action': 'STATUS'
-    })
-    if response.status_code >= 300:
-        logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
-        response.raise_for_status()
+    # /status opens a connection of its own rather than taking one from the pool the lookups
+    # share. It is what the Kubernetes probes call, so it should answer whether Solr takes a
+    # new connection now, not depend on the state lookups left a pooled one in -- a probe
+    # failing on a connection a cancelled bulk lookup broke would restart a pod whose Solr is
+    # fine. One connection setup every few seconds costs nothing worth saving.
+    async with new_solr_client() as client:
+        response = await solr_request(client, "get", query_url, params={
+            'action': 'STATUS'
+        })
+        if response.status_code >= 300:
+            logger.error("Solr error on accessing /solr/admin/cores?action=STATUS: %s", response.text)
+            response.raise_for_status()
 
-    result = response.json()
+        result = response.json()
+
+        # We should have a status for our core. Standalone Solr calls it $SOLR_CORE
+        # (name_lookup); the older cloud-mode backups called it
+        # name_lookup_shard1_replica_n1. A NameRes Solr only ever has one core, so if the
+        # expected name isn't there but there is exactly one core, report on that one.
+        cores = result.get('status', {})
+        core_name = config.solr_core
+        core = cores.get(core_name)
+        if core is None and len(cores) == 1:
+            core_name, core = next(iter(cores.items()))
+
+        # Solr's own health metrics are an extra round-trip, so only on ?full=true. Without a
+        # core there are no query or cache figures to read, only the JVM's.
+        metrics = await fetch_solr_metrics(client, core_name if core is not None else None,
+                                           core) if full else {}
 
     # Do we know the Babel version and version URL? It will be stored in an environmental variable if we do.
     babel_version = os.environ.get("BABEL_VERSION", "unknown")
@@ -540,16 +610,6 @@ async def status(full: bool = False) -> Dict:
     # Computed from NameRes's own record of its lookups (no Solr round-trip), so it stays on
     # the default /status path.
     recent_queries = recent_lookups.summary()
-
-    # We should have a status for our core. Standalone Solr calls it $SOLR_CORE
-    # (name_lookup); the older cloud-mode backups called it
-    # name_lookup_shard1_replica_n1. A NameRes Solr only ever has one core, so if the
-    # expected name isn't there but there is exactly one core, report on that one.
-    cores = result.get('status', {})
-    core_name = config.solr_core
-    core = cores.get(core_name)
-    if core is None and len(cores) == 1:
-        core_name, core = next(iter(cores.items()))
 
     # The fields both branches below report. Built once and spread into each, so that the
     # two can't drift: the error branch is what a mis-pointed or still-loading deployment
@@ -573,10 +633,6 @@ async def status(full: bool = False) -> Dict:
         'nameres_version': nameres_version,
         'config': config.public(),
     }
-
-    # Solr's own health metrics are an extra round-trip, so only on ?full=true. Without a
-    # core there are no query or cache figures to read, only the JVM's.
-    metrics = await fetch_solr_metrics(core_name if core is not None else None, core) if full else {}
 
     if core is not None:
         index = {}
@@ -734,8 +790,8 @@ async def name_lookup(curies) -> Dict[str, Dict]:
         "query": curie_filter,
         "limit": 1000000,
     }
-    client = solr_client()
-    response = await client.post(query, json=params)
+    async with solr_client() as client:
+        response = await solr_request(client, "post", query, json=params)
     response.raise_for_status()
     response_json = response.json()
     output = {
@@ -1169,8 +1225,8 @@ async def lookup(string: str,
     time_solr_end = None    # Set once Solr has answered; see the except below.
     query_url = f"http://{config.solr_host}:{config.solr_port}/solr/{config.solr_core}/select"
     try:
-        client = solr_client()
-        response = await client.post(query_url, json=params)
+        async with solr_client() as client:
+            response = await solr_request(client, "post", query_url, json=params)
         if response.status_code >= 300:
             logger.error("Solr REST error: %s", response.text)
             response.raise_for_status()
