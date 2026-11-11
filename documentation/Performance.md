@@ -32,10 +32,10 @@ Three latencies nest inside one another, and the fields are named for which one 
 | Solr handler | `solr.queries.handler_ms` (with `?full=true`) | Only the time inside Solr's `/select` handler, as Solr's own timer measures it. |
 
 So `lookup_ms` − `solr_round_trip_ms` is NameRes's result processing, and `solr_round_trip_ms` −
-`handler_ms` is connection, transfer and JSON overhead. NameRes shares one HTTP client with kept-
-alive connections across its Solr requests, so that second gap should be small; a large one points
-at the network between the API and Solr, or at large responses. (When `lookup()` opened a new
-client and connection per query, that overhead took a 1 ms query on a local Solr to about 8 ms.)
+`handler_ms` is connection, transfer and JSON overhead. NameRes's lookups share one HTTP client
+whose connections are kept alive between requests, so that second gap should be small; a large one
+points at the network between the API and Solr, or at large responses. (When `lookup()` opened a
+new client and connection per query, that overhead took a 1 ms query on a local Solr to about 8 ms.)
 
 | Field | What it means |
 |---|---|
