@@ -631,6 +631,126 @@ def test_diagnostic_setting_reads_valid_values(monkeypatch):
     assert math.isclose(diagnostic_setting("NAMERES_TEST_SETTING", 7.0, float), 250.5)
 
 
+# The tests below pin how NameRes holds its httpx clients. They fake Solr, like the tests
+# above, and record which client instance each request went through (`self`).
+
+EMPTY_SOLR_RESULTS = {'response': {'docs': []}}
+
+
+def _recording_solr(monkeypatch, post_result=None):
+    """Patch httpx.AsyncClient.get/post with fakes that record (client, url, kwargs) for each
+    call. The POST returns post_result(call_number), or an empty result set by default."""
+    gets, posts = [], []
+    fake_get = _fake_solr_get()
+
+    async def get(self, url, params=None, **kwargs):
+        gets.append((self, url, kwargs))
+        return await fake_get(self, url, params=params, **kwargs)
+
+    async def post(self, url, **kwargs):
+        posts.append((self, url, kwargs))
+        if post_result is not None:
+            result = post_result(len(posts))
+            if isinstance(result, BaseException):
+                raise result
+            return result
+        return httpx.Response(200, request=httpx.Request("POST", url), json=EMPTY_SOLR_RESULTS)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", get)
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    return gets, posts
+
+
+def test_lookups_share_one_client_closed_on_shutdown(monkeypatch):
+    """Under a running lifespan (as under uvicorn), lookups reuse one client, and so its
+    kept-alive connections; /status uses its own; shutdown closes the shared one."""
+    import api.server
+    gets, posts = _recording_solr(monkeypatch)
+
+    # As a context manager, TestClient runs the app's lifespan and serves every request
+    # from one event loop, as uvicorn does.
+    with TestClient(app) as client:
+        assert client.get("/lookup", params={'string': 'alzheimer'}).status_code == 200
+        assert client.get("/lookup", params={'string': 'diabetes'}).status_code == 200
+        assert client.post("/synonyms", json={'preferred_curies': ['MONDO:0004975']}).status_code == 200
+        assert client.get("/status").status_code == 200
+
+        shared = posts[0][0]
+        assert all(c is shared for c, _, _ in posts) and len(posts) == 3
+        assert not shared.is_closed
+        # The probe's client is not the lookups' pool, and is closed once /status answers.
+        assert gets[0][0] is not shared and gets[0][0].is_closed
+
+    assert shared.is_closed
+    assert api.server._shared_solr_client is None
+
+
+def test_solr_clients_outside_the_lifespan_are_closed(monkeypatch):
+    """Without a lifespan -- a TestClient used without `with`, which starts a loop per
+    request, or asyncio.run() -- each request gets a client of its own and closes it,
+    rather than leaving one per finished loop holding an open socket."""
+    import api.server
+    _, posts = _recording_solr(monkeypatch)
+
+    client = TestClient(app)
+    client.get("/lookup", params={'string': 'alzheimer'})
+    client.get("/lookup", params={'string': 'diabetes'})
+    assert posts[0][0] is not posts[1][0]
+    assert all(c.is_closed for c, _, _ in posts)
+
+    async def borrow():
+        async with api.server.solr_client() as c:
+            assert not c.is_closed
+            return c
+    assert asyncio.run(borrow()).is_closed
+    assert api.server._shared_solr_client is None
+
+
+def test_solr_timeout_is_read_per_request(monkeypatch):
+    """The shared client is made once, at startup, but a later change to `config` (as tests
+    make with dataclasses.replace) still sets the timeout of the next request."""
+    import dataclasses
+    import api.server
+    _, posts = _recording_solr(monkeypatch)
+
+    with TestClient(app) as client:
+        monkeypatch.setattr(api.server, "config",
+                            dataclasses.replace(api.server.config, solr_timeout_seconds=7))
+        client.get("/lookup", params={'string': 'alzheimer'})
+    assert posts[0][2]['timeout'] == 7
+
+
+@pytest.mark.parametrize("failure", [
+    httpx.RemoteProtocolError("Server disconnected without sending a response."),
+    httpx.ReadError("Connection reset by peer"),
+    httpx.WriteError("Broken pipe"),
+])
+def test_lookup_retries_once_on_a_broken_connection(monkeypatch, failure):
+    """A pooled connection Solr closed under the request (after a Solr restart, say) is
+    retried once, on a new connection, instead of becoming a 500."""
+    _, posts = _recording_solr(monkeypatch, lambda n: failure if n == 1 else
+                               httpx.Response(200, request=httpx.Request("POST", "http://solr"),
+                                              json=EMPTY_SOLR_RESULTS))
+    with TestClient(app) as client:
+        assert client.get("/lookup", params={'string': 'alzheimer'}).status_code == 200
+    assert len(posts) == 2
+
+
+@pytest.mark.parametrize("failure, attempts", [
+    # Retried once, then reported: a Solr that keeps dropping connections is down.
+    (httpx.RemoteProtocolError("Server disconnected without sending a response."), 2),
+    # Not retried: each attempt would cost another SOLR_TIMEOUT_SECONDS.
+    (httpx.ReadTimeout("timed out"), 1),
+    # Not retried: a refused connection was never a pooled one going stale.
+    (httpx.ConnectError("connection refused"), 1),
+])
+def test_lookup_retry_is_limited(monkeypatch, failure, attempts):
+    _, posts = _recording_solr(monkeypatch, lambda n: failure)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/lookup", params={'string': 'alzheimer'}).status_code == 500
+    assert len(posts) == attempts
+
+
 # The lookup log line is parsed downstream (TranslatorSRI/babel-validation's NameRes log
 # analysis, its PR #107: LOOKUP_LINE_RE in log-analysis/nameres/analyze_nameres_logs.py), so
 # its shape is an interface. Change this pattern only with that parser.
