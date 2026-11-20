@@ -1,5 +1,5 @@
 # leverage the renci python base image
-FROM ghcr.io/translatorsri/renci-python-image:3.11.5
+FROM ghcr.io/translatorsri/renci-python-image:3.12.4
 
 # install basic tools
 RUN apt update
