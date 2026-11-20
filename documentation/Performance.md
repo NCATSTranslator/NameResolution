@@ -149,6 +149,16 @@ request:
 WARNING: FAILED BULK QUERY (ConnectError): Bulk lookup query for 5000 strings (...): 1 failed, and those not yet done were cancelled, after 12.30ms
 ```
 
+`/synonyms` and `/reverse_lookup` log one line per request, with the same `SLOW QUERY` and
+`FAILED QUERY` prefixes at WARNING. They are not in `recent_queries`, so these lines (and
+`solr.queries`, which counts every `/select`) are where to look for them:
+
+```
+INFO: CURIE Lookup on 2 CURIEs ["MONDO:0000828", "CHEBI:74925"]: took 8.41ms
+WARNING: SLOW QUERY: CURIE Lookup on 2 CURIEs [...]: took 912.07ms
+WARNING: FAILED QUERY (timeout: ReadTimeout): CURIE Lookup on 2 CURIEs [...]: failed after 60003.11ms
+```
+
 Key interpretation:
 - **Solr round trip ≈ total** → the time is in the Solr request. That is either Solr itself
   (JVM, index, caches) or the connection, network and transfer in between; compare

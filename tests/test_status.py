@@ -338,6 +338,33 @@ def test_status_reads_metrics_of_the_resolved_core(monkeypatch):
     assert solr['queries']['requests'] == 42
 
 
+def test_slow_curie_lookup_logs_warning(monkeypatch, caplog):
+    """/synonyms and /reverse_lookup log a slow call as SLOW QUERY, and a fast one at INFO."""
+    import api.server
+    client = TestClient(app)
+    for threshold, expect_warning in ((0, True), (10_000_000, False)):
+        monkeypatch.setattr(api.server, "SLOW_QUERY_THRESHOLD_MS", threshold)
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="api.server"):
+            client.get("/synonyms", params={'preferred_curies': ['MONDO:0000828']})
+        lines = [r for r in caplog.records if "CURIE Lookup on 1 CURIEs" in r.getMessage()]
+        assert len(lines) == 1
+        assert (lines[0].levelno == logging.WARNING) == expect_warning
+        assert ("SLOW QUERY" in lines[0].getMessage()) == expect_warning
+
+
+def test_failed_curie_lookup_logs_warning(monkeypatch, caplog):
+    """A /synonyms call that fails says which CURIEs it was for and how long it took."""
+    async def failing_post(self, url, **kwargs):
+        raise httpx.ReadTimeout("timed out")
+    monkeypatch.setattr(httpx.AsyncClient, "post", failing_post)
+    client = TestClient(app, raise_server_exceptions=False)
+    with caplog.at_level(logging.WARNING, logger="api.server"):
+        assert client.post("/synonyms", json={'preferred_curies': ['MONDO:0000828']}).status_code == 500
+    assert any("FAILED QUERY (timeout: ReadTimeout): CURIE Lookup on 1 CURIEs" in r.getMessage()
+               for r in caplog.records)
+
+
 @pytest.mark.parametrize("failure, outcome", [
     (httpx.ReadTimeout("timed out"), 'timeout'),
     (httpx.ConnectError("connection refused"), 'error'),
