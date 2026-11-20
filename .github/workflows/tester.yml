@@ -5,7 +5,11 @@ on: [push]
 jobs:
   test:
     name: test
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: setup-python installs an exact patch release, and each
+    # runner image only has builds of some of them. When ubuntu-latest moved to 26.04
+    # (November 2026), which has no build of 3.11.0 to 3.11.14, every run failed at
+    # "Set up Python" before a test ran. Move this and python-version together.
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: [3.11.0]
