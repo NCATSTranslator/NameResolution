@@ -123,11 +123,13 @@ trivial in every environment:
 - **Locally (docker-compose):** extract the tarball into the Solr data directory
   (`./data/solr` by default) so you get `./data/solr/name_lookup/`, then
   `docker-compose up`. Solr auto-discovers the core on startup.
-- **In Kubernetes (Helm):** the [`name-lookup` chart](../data/name-lookup) does
-  this automatically -- an init container downloads and extracts the backup into
-  the Solr volume, and the Solr StatefulSet auto-discovers the core. The restore
-  Job no longer creates a collection or re-applies the schema; its only remaining
-  job is deleting blocklisted CURIEs.
+- **In Kubernetes (Helm):** the `name-lookup` chart in translator-devops
+  (https://github.com/helxplatform/translator-devops/tree/develop/helm/name-lookup)
+  does this automatically -- set its `dataUrl` value to the tarball's URL and an init
+  container downloads and extracts the backup into the Solr volume, where the Solr
+  StatefulSet auto-discovers the core. The restore Job no longer creates a collection
+  or re-applies the schema; its only remaining job is deleting blocklisted CURIEs. The
+  chart's README has the install, check and lock-in steps.
 
 Solr needs to *write* to the core it serves — it takes a write lock, and refuses to
 load the core if it cannot. The loading image runs as uid 1000 and the official Solr

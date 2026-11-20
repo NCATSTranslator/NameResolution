@@ -91,7 +91,17 @@ $ bash main.sh
 
 ### Kubernetes
 
-Helm charts can be found at https://github.com/helxplatform/translator-devops/helm/name-lookup.
+The `name-lookup` Helm chart in translator-devops deploys Solr and NameRes together:
+https://github.com/helxplatform/translator-devops/tree/develop/helm/name-lookup
+
+Point its `dataUrl` value at a backup built by [data-loading](../data-loading/README.md)
+and the chart downloads and extracts it into the Solr volume. The chart's README covers
+installing, checking the load, and locking the data in place afterwards.
+
+Locking in means a `helm upgrade` with `dataUrl` cleared, once the load checks out. A
+pod restart with the same `dataUrl` keeps the index, but while `dataUrl` is set, any
+upgrade that changes it (say, a values file that has moved on to a newer Babel release)
+deletes the index and downloads the new one, and NameRes is down for the whole reload.
 
 ## examples
 

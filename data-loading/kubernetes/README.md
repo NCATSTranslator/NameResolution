@@ -80,7 +80,8 @@ so changing `solrconfig.xml` before `make all` takes full effect.
 `name_lookup` core from the checked-in configset and loads it. `make
 data/backup.done` optimizes the index, stops Solr and writes
 `data/snapshot.backup.tar.gz`. Copy that out (`kubectl cp`, or push it straight to
-wherever `dataUrl` will point), then delete the pod and **both** PVCs -- they are
+wherever the [`name-lookup` chart](https://github.com/helxplatform/translator-devops/tree/develop/helm/name-lookup)'s
+`dataUrl` value will point), then delete the pod and **both** PVCs -- they are
 persistent, and between them they hold around a terabyte.
 
 Run it under `screen` or `tmux`: a full load is hours long, and `kubectl exec` does
