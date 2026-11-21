@@ -248,6 +248,15 @@ recent_lookups = RecentLookups(RECENT_TIMES_COUNT)
 # so slow queries stand out in the logs. See documentation/Performance.md.
 SLOW_QUERY_THRESHOLD_MS = diagnostic_setting("SLOW_QUERY_THRESHOLD_MS", 500.0, float)
 
+
+def failure_outcome(e: BaseException) -> str:
+    """ How a failed Solr query ended, as FAILED QUERY log lines and recent_queries name it. """
+    if isinstance(e, httpx.TimeoutException):
+        return 'timeout'
+    if isinstance(e, asyncio.CancelledError):
+        return 'cancelled'
+    return 'error'
+
 # ENDPOINT /
 # If someone tries accessing /, we should redirect them to the Swagger interface.
 @app.get("/", include_in_schema=False)
@@ -689,19 +698,36 @@ async def name_lookup(curies) -> Dict[str, Dict]:
         "query": curie_filter,
         "limit": 1000000,
     }
-    async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
-        response = await client.post(query, json=params)
-    response.raise_for_status()
-    response_json = response.json()
-    output = {
-        curie: {}
-        for curie in curies
-    }
-    for doc in response_json["response"]["docs"]:
-        output[doc["curie"]] = doc
-    time_end = time.perf_counter_ns()
+    log_msg_prefix = f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)}"
+    try:
+        async with httpx.AsyncClient(timeout=config.solr_timeout) as client:
+            response = await client.post(query, json=params)
+        response.raise_for_status()
+        response_json = response.json()
+        output = {
+            curie: {}
+            for curie in curies
+        }
+        for doc in response_json["response"]["docs"]:
+            output[doc["curie"]] = doc
+    except BaseException as e:
+        # As in lookup(): the calls that time out are the slowest of all, and without this
+        # the log would say nothing of which CURIEs were asked for or how long it took.
+        # /status doesn't count these (recent_queries is /lookup only; see issue #309).
+        time_taken_ms = (time.perf_counter_ns() - time_start)/1_000_000
+        logger.warning(f"FAILED QUERY ({failure_outcome(e)}: {type(e).__name__}): {log_msg_prefix}: "
+                       f"failed after {time_taken_ms:.2f}ms")
+        raise
 
-    logger.info(f"CURIE Lookup on {len(curies)} CURIEs {json.dumps(curies)}: took {(time_end - time_start)/1_000_000:.2f}ms")
+    time_taken_ms = (time.perf_counter_ns() - time_start)/1_000_000
+    # /synonyms and /reverse_lookup are a single Solr query each, so a slow one stands out
+    # in the log the way a slow /lookup does. This was the one piece of PR #268's
+    # per-endpoint slow-query tracking that main had no equivalent of.
+    log_msg = f"{log_msg_prefix}: took {time_taken_ms:.2f}ms"
+    if time_taken_ms > SLOW_QUERY_THRESHOLD_MS:
+        logger.warning("SLOW QUERY: " + log_msg)
+    else:
+        logger.info(log_msg)
 
     return output
 
@@ -1229,12 +1255,7 @@ async def lookup(string: str,
         # answered, not when the lookup failed.
         time_failed = time.perf_counter_ns()
         time_taken_ms = (time_failed - time_start)/1_000_000
-        if isinstance(e, httpx.TimeoutException):
-            outcome = 'timeout'
-        elif isinstance(e, asyncio.CancelledError):
-            outcome = 'cancelled'
-        else:
-            outcome = 'error'
+        outcome = failure_outcome(e)
         if not bulk:
             solr_end = time_solr_end if time_solr_end is not None else time_failed
             recent_lookups.record(time_failed - time_start, solr_end - time_solr_start, outcome)
